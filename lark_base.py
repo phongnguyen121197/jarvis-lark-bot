@@ -117,7 +117,7 @@ async def get_all_records(
     app_token: str,
     table_id: str,
     filter_formula: Optional[str] = None,
-    max_records: int = 1000
+    max_records: int = 2000
 ) -> List[Dict[str, Any]]:
     """
     Lấy tất cả records (với pagination)
@@ -130,7 +130,7 @@ async def get_all_records(
             app_token=app_token,
             table_id=table_id,
             filter_formula=filter_formula,
-            page_size=100,
+            page_size=500,  # Max allowed by API
             page_token=page_token
         )
         
@@ -200,10 +200,11 @@ async def get_booking_records(
     Returns:
         List các KOC records
     """
+    # Lấy tất cả records (tăng max lên 2000 để đảm bảo lấy hết)
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
-        max_records=500
+        max_records=2000
     )
     
     def parse_lark_value(value):
@@ -211,15 +212,12 @@ async def get_booking_records(
         if value is None:
             return None
         
-        # Nếu là string đơn giản
         if isinstance(value, str):
             return value
         
-        # Nếu là số
         if isinstance(value, (int, float)):
             return value
         
-        # Nếu là list (thường là [{'text': 'value', 'type': 'text'}])
         if isinstance(value, list):
             if len(value) == 0:
                 return None
@@ -228,7 +226,6 @@ async def get_booking_records(
                 return first.get("text") or first.get("value") or first.get("name")
             return first
         
-        # Nếu là dict (thường là link hoặc object)
         if isinstance(value, dict):
             return value.get("text") or value.get("link") or value.get("value")
         
@@ -239,14 +236,12 @@ async def get_booking_records(
         if value is None:
             return None
         
-        # Nếu là số trực tiếp
         if isinstance(value, (int, float)):
             month_val = int(value)
             if 1 <= month_val <= 12:
                 return month_val
             return None
         
-        # Nếu là string
         if isinstance(value, str):
             match = re.search(r'(\d{1,2})', value)
             if match:
@@ -255,7 +250,6 @@ async def get_booking_records(
                     return month_val
             return None
         
-        # Nếu là list (thường là [{'text': '09', 'type': 'text'}])
         if isinstance(value, list):
             if len(value) == 0:
                 return None
@@ -280,7 +274,6 @@ async def get_booking_records(
                         return month_val
             return None
         
-        # Nếu là dict
         if isinstance(value, dict):
             text_val = value.get("text") or value.get("value")
             if text_val:
@@ -295,17 +288,21 @@ async def get_booking_records(
     
     print(f"📥 Fetched {total_records} total records from Lark Base")
     
-    # Debug: Log first 3 records' month values
-    for i, record in enumerate(records[:3]):
+    # Count months distribution for debugging
+    month_counts = {}
+    for record in records:
         fields = record.get("fields", {})
         raw_month = fields.get("Tháng air")
         parsed_month = extract_month(raw_month)
-        print(f"   Record {i}: Tháng air raw={raw_month}, parsed={parsed_month}")
+        if parsed_month not in month_counts:
+            month_counts[parsed_month] = 0
+        month_counts[parsed_month] += 1
+    
+    print(f"📊 Month distribution: {month_counts}")
     
     for record in records:
         fields = record.get("fields", {})
         
-        # Extract với đúng tên field từ API
         koc_data = {
             "record_id": record.get("record_id"),
             "id_koc": parse_lark_value(fields.get("ID KOC")),
@@ -329,19 +326,17 @@ async def get_booking_records(
         if month is not None:
             koc_month = koc_data.get("thang_air")
             
-            # Nếu không có tháng air, skip record này
             if koc_month is None:
                 skipped_wrong_month += 1
                 continue
             
-            # So sánh tháng
             if koc_month != month:
                 skipped_wrong_month += 1
                 continue
         
         results.append(koc_data)
     
-    print(f"📊 Filter result: {len(results)} records match month={month}, skipped {skipped_wrong_month}")
+    print(f"📊 Result: {len(results)} records for month={month}, skipped {skipped_wrong_month}")
     
     return results
 

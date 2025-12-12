@@ -288,7 +288,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.4"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.5"}
 
 @app.get("/health")
 async def health():
