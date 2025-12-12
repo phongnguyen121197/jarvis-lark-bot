@@ -146,9 +146,15 @@ async def process_jarvis_query(text: str) -> str:
             month = intent_result.get("month")
             week = intent_result.get("week")
             group_by = intent_result.get("group_by", "product")  # "product" hoặc "brand"
+            product_filter = intent_result.get("product_filter")  # "box_qua", "nuoc_hoa", etc.
             
             # Lấy dữ liệu từ Lark Base
-            summary_data = await generate_koc_summary(month=month, week=week, group_by=group_by)
+            summary_data = await generate_koc_summary(
+                month=month, 
+                week=week, 
+                group_by=group_by,
+                product_filter=product_filter
+            )
             
             # Sinh báo cáo
             report = await generate_koc_report_text(summary_data)
@@ -325,7 +331,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.2"}
 
 @app.get("/health")
 async def health():

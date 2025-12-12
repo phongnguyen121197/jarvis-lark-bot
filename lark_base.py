@@ -548,7 +548,20 @@ async def get_task_records(
     return results
 
 # ============ REPORT GENERATORS ============
-async def generate_koc_summary(month: int, week: Optional[int] = None, group_by: str = "product") -> Dict[str, Any]:
+
+# Product filter patterns
+PRODUCT_FILTER_PATTERNS = {
+    "box_qua": ["box quà", "box qua", "set quà", "set qua"],
+    "nuoc_hoa": ["nước hoa", "nuoc hoa"],
+    "sua_tam": ["sữa tắm", "sua tam"],
+}
+
+async def generate_koc_summary(
+    month: int, 
+    week: Optional[int] = None, 
+    group_by: str = "product",
+    product_filter: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Tạo báo cáo tổng hợp KOC theo tháng/tuần
     Bao gồm: chi phí deal, số lượng theo sản phẩm hoặc phân loại
@@ -557,11 +570,23 @@ async def generate_koc_summary(month: int, week: Optional[int] = None, group_by:
         month: Tháng cần lấy
         week: Tuần cần lấy (optional)
         group_by: "product" (Nước hoa, Box quà) hoặc "brand" (Dark Beauty, Lady Killer)
+        product_filter: Filter theo loại sản phẩm ("box_qua", "nuoc_hoa", etc.)
     
     Returns:
         Dict chứa summary và danh sách chi tiết
     """
     records = await get_booking_records(month=month, week=week)
+    
+    # Filter by product if specified
+    if product_filter and product_filter in PRODUCT_FILTER_PATTERNS:
+        patterns = PRODUCT_FILTER_PATTERNS[product_filter]
+        filtered_records = []
+        for koc in records:
+            san_pham = str(koc.get("san_pham") or "").lower()
+            if any(p in san_pham for p in patterns):
+                filtered_records.append(koc)
+        records = filtered_records
+        print(f"📦 Product filter '{product_filter}': {len(records)} records match")
     
     total = len(records)
     da_air = 0

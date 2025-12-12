@@ -44,6 +44,13 @@ BRAND_KEYWORDS = [
     "kalle", "dark", "lady", "killer"
 ]
 
+# Keywords để filter theo loại sản phẩm
+PRODUCT_FILTER_KEYWORDS = {
+    "box_qua": ["box quà", "set quà", "box qua", "set qua", "quà tặng", "qua tang", "gift box", "giftbox"],
+    "nuoc_hoa": ["nước hoa", "nuoc hoa", "perfume"],
+    "sua_tam": ["sữa tắm", "sua tam", "body wash"],
+}
+
 # Vị trí cụ thể
 VI_TRI_MAPPING = {
     "hr": ["hr", "nhân sự", "nhan su"],
@@ -185,10 +192,20 @@ def classify_intent(text: str) -> Dict[str, Any]:
     
     # ========== CHECK GPT CHAT FIRST ==========
     # Ưu tiên cao nhất: Nếu user muốn hỏi GPT trực tiếp
-    gpt_triggers = ["gpt:", "chatgpt:", "hỏi gpt", "hoi gpt", "ask gpt", "ai:", "hỏi ai", "hoi ai"]
+    # Patterns: "gpt:", "gpt viết", "gpt hỏi", "chatgpt", etc.
+    gpt_triggers = [
+        "gpt:", "gpt ", "chatgpt:", "chatgpt ", 
+        "hỏi gpt", "hoi gpt", "ask gpt",
+        "ai:", "hỏi ai", "hoi ai"
+    ]
     is_gpt_chat = any(trigger in text_lower for trigger in gpt_triggers)
     
-    if is_gpt_chat:
+    # Nhưng KHÔNG phải GPT chat nếu có từ khóa KOC/booking/task đi kèm
+    # Ví dụ: "GPT viết brief cho KOC" → vẫn là GPT chat
+    # Nhưng: "Tổng hợp KOC tháng 12" → KHÔNG phải GPT chat
+    has_report_keywords = any(kw in text_lower for kw in ["tổng hợp", "tong hop", "báo cáo", "bao cao", "thống kê", "thong ke", "tóm tắt", "tom tat"])
+    
+    if is_gpt_chat and not has_report_keywords:
         question = extract_gpt_question(text)
         return {
             "intent": INTENT_GPT_CHAT,
@@ -224,6 +241,13 @@ def classify_intent(text: str) -> Dict[str, Any]:
     team = parse_team(text)
     vi_tri = parse_vi_tri(text)
     
+    # Detect product filter (box quà, nước hoa, etc.)
+    product_filter = None
+    for filter_key, keywords in PRODUCT_FILTER_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            product_filter = filter_key
+            break
+    
     # Default to current month if not specified
     current_month = datetime.now().month
     year = datetime.now().year
@@ -244,6 +268,7 @@ def classify_intent(text: str) -> Dict[str, Any]:
             "year": year,
             "filters": extract_koc_filters(text_lower),
             "group_by": group_by,  # "product" hoặc "brand"
+            "product_filter": product_filter,  # "box_qua", "nuoc_hoa", etc.
             "original_text": text
         }
     
