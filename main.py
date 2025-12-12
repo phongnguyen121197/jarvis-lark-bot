@@ -149,11 +149,13 @@ async def process_jarvis_query(text: str) -> str:
             end_date = intent_result.get("end_date")
             team = intent_result.get("team_filter")
             vi_tri = intent_result.get("vi_tri_filter")
+            month = intent_result.get("month")
             
             # Lấy dữ liệu
             calendar_data = await generate_content_calendar(
                 start_date=start_date,
                 end_date=end_date,
+                month=month,
                 team=team,
                 vi_tri=vi_tri
             )
@@ -176,19 +178,10 @@ async def process_jarvis_query(text: str) -> str:
         elif intent == INTENT_GENERAL_SUMMARY:
             month = intent_result.get("month")
             week = intent_result.get("week")
-            start_date = intent_result.get("start_date")
-            end_date = intent_result.get("end_date")
             
-            # Lấy cả 2 loại dữ liệu
-            from intent_classifier import get_current_week_range
-            if not start_date or not end_date:
-                start_date, end_date = get_current_week_range()
-            
+            # Lấy cả 2 loại dữ liệu, filter theo tháng
             koc_data = await generate_koc_summary(month=month, week=week)
-            content_data = await generate_content_calendar(
-                start_date=start_date,
-                end_date=end_date
-            )
+            content_data = await generate_content_calendar(month=month)
             
             # Sinh báo cáo tổng hợp
             report = await generate_general_summary_text(koc_data, content_data)
@@ -303,7 +296,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.6"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.9"}
 
 @app.get("/health")
 async def health():

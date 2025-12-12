@@ -315,6 +315,7 @@ async def get_booking_records(
             "ngay_gan_gio": parse_lark_value(fields.get("Ngày gắn giỏ")),
             "nhan_su_book": parse_lark_value(fields.get("Nhân sự book")),
             "san_pham": fields.get("Sản phẩm"),
+            "phan_loai_san_pham": fields.get("Phân loại sản phẩm"),  # Thêm field này
             "status": parse_lark_value(fields.get("Status")),
             "luot_xem": parse_lark_value(fields.get("Lượt xem hiện tại")),
             "da_air": fields.get("Đã air"),
@@ -346,6 +347,7 @@ async def get_booking_records(
 async def get_task_records(
     team: Optional[str] = None,
     vi_tri: Optional[str] = None,
+    month: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -355,6 +357,7 @@ async def get_task_records(
     Args:
         team: Tên team để filter (theo Người phụ trách)
         vi_tri: Vị trí để filter (HR, Content Creator, Ecommerce...)
+        month: Tháng để filter (1-12) - dựa trên field "Tháng"
         start_date: Ngày bắt đầu (YYYY-MM-DD)
         end_date: Ngày kết thúc (YYYY-MM-DD)
     
@@ -379,6 +382,33 @@ async def get_task_records(
             return value
         return str(value) if value else None
     
+    def extract_task_month(value) -> Optional[int]:
+        """Extract tháng từ field Tháng của Task"""
+        if value is None:
+            return None
+        
+        if isinstance(value, (int, float)):
+            m = int(value)
+            return m if 1 <= m <= 12 else None
+        
+        if isinstance(value, str):
+            match = re.search(r'(\d{1,2})', value)
+            if match:
+                m = int(match.group(1))
+                return m if 1 <= m <= 12 else None
+        
+        if isinstance(value, list) and len(value) > 0:
+            first = value[0]
+            if isinstance(first, dict):
+                text_val = first.get("text") or first.get("value")
+                if text_val:
+                    match = re.search(r'(\d{1,2})', str(text_val))
+                    if match:
+                        m = int(match.group(1))
+                        return m if 1 <= m <= 12 else None
+        
+        return None
+    
     results = []
     for record in records:
         fields = record.get("fields", {})
@@ -397,6 +427,9 @@ async def get_task_records(
             except:
                 pass
         
+        # Extract tháng từ field "Tháng"
+        task_month = extract_task_month(fields.get("Tháng"))
+        
         task_data = {
             "record_id": record.get("record_id"),
             "du_an": extract_field_value(fields, "Dự án"),
@@ -404,17 +437,22 @@ async def get_task_records(
             "mo_ta": extract_field_value(fields, "Mô tả chi tiết"),
             "nguoi_phu_trach": parse_person_field(fields.get("Người phụ trách")),
             "nguoi_duyet": parse_person_field(fields.get("Người duyệt")),
-            "vi_tri": fields.get("Vị trí"),  # HR, Content Creator TikTok, Ecommerce...
+            "vi_tri": fields.get("Vị trí"),
             "ngay_tao": fields.get("Ngày tạo"),
             "deadline": deadline_str,
             "deadline_ts": deadline_ts,
             "link_ket_qua": extract_field_value(fields, "Link Kết quả"),
             "duyet": fields.get("Duyệt"),
-            "overdue": fields.get("Overdue"),  # Có giá trị = đã quá hạn
+            "overdue": fields.get("Overdue"),
             "ghi_chu": extract_field_value(fields, "Ghi chú"),
-            "thang": extract_field_value(fields, "Tháng"),
+            "thang": task_month,  # Đã parse thành int
             "nam": extract_field_value(fields, "Năm"),
         }
+        
+        # Filter theo tháng (field "Tháng")
+        if month is not None:
+            if task_data.get("thang") != month:
+                continue
         
         # Filter theo vị trí
         if vi_tri:
@@ -434,7 +472,7 @@ async def get_task_records(
             else:
                 continue
         
-        # Filter theo ngày
+        # Filter theo ngày deadline
         if start_date or end_date:
             if deadline_ts:
                 try:
@@ -477,8 +515,8 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
     tong_chi_phi_deal = 0
     tong_chi_phi_thanh_toan = 0
     
-    # Theo sản phẩm
-    by_san_pham = {}  # {san_pham: {count, chi_phi, da_air}}
+    # Theo phân loại sản phẩm (thay vì sản phẩm)
+    by_phan_loai = {}  # {phan_loai: {count, chi_phi, da_air, chua_air, kocs: []}}
     
     missing_link_kocs = []
     missing_gio_kocs = []
@@ -501,20 +539,21 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
             except:
                 pass
         
-        # === Theo sản phẩm ===
-        san_pham = koc.get("san_pham") or "Không xác định"
-        if san_pham not in by_san_pham:
-            by_san_pham[san_pham] = {
+        # === Theo phân loại sản phẩm ===
+        phan_loai = koc.get("phan_loai_san_pham") or koc.get("san_pham") or "Không xác định"
+        if phan_loai not in by_phan_loai:
+            by_phan_loai[phan_loai] = {
                 "count": 0,
                 "chi_phi": 0,
                 "da_air": 0,
-                "chua_air": 0
+                "chua_air": 0,
+                "kocs": []  # Lưu danh sách KOC để đề xuất cụ thể
             }
-        by_san_pham[san_pham]["count"] += 1
+        by_phan_loai[phan_loai]["count"] += 1
         
         if da_deal:
             try:
-                by_san_pham[san_pham]["chi_phi"] += float(str(da_deal).replace(",", ""))
+                by_phan_loai[phan_loai]["chi_phi"] += float(str(da_deal).replace(",", ""))
             except:
                 pass
         
@@ -525,9 +564,20 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
         
         has_aired = bool(link_air or thoi_gian_air or da_air_field)
         
+        # Lưu thông tin KOC để đề xuất cụ thể
+        koc_info = {
+            "id_koc": koc.get("id_koc"),
+            "id_kenh": koc.get("id_kenh"),
+            "link_air": link_air,
+            "da_air": has_aired,
+            "trang_thai_gio": koc.get("trang_thai_gan_gio"),
+            "chi_phi": da_deal
+        }
+        by_phan_loai[phan_loai]["kocs"].append(koc_info)
+        
         if has_aired:
             da_air += 1
-            by_san_pham[san_pham]["da_air"] += 1
+            by_phan_loai[phan_loai]["da_air"] += 1
             
             if not link_air:
                 da_air_chua_link += 1
@@ -544,7 +594,7 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
                 missing_gio_kocs.append(koc)
         else:
             chua_air += 1
-            by_san_pham[san_pham]["chua_air"] += 1
+            by_phan_loai[phan_loai]["chua_air"] += 1
     
     return {
         "month": month,
@@ -559,36 +609,48 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
             "tong_chi_phi_deal": tong_chi_phi_deal,
             "tong_chi_phi_thanh_toan": tong_chi_phi_thanh_toan
         },
-        "by_san_pham": by_san_pham,
+        "by_phan_loai": by_phan_loai,  # Đổi từ by_san_pham
         "missing_link_kocs": missing_link_kocs[:10],
         "missing_gio_kocs": missing_gio_kocs[:10],
         "all_records": records
     }
 
 async def generate_content_calendar(
-    start_date: str,
-    end_date: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    month: Optional[int] = None,
     team: Optional[str] = None,
     vi_tri: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Tạo báo cáo lịch content theo tuần
+    Tạo báo cáo lịch content theo tuần hoặc tháng
     
     Args:
-        start_date: Ngày bắt đầu (YYYY-MM-DD)
-        end_date: Ngày kết thúc (YYYY-MM-DD)
+        start_date: Ngày bắt đầu (YYYY-MM-DD) - optional
+        end_date: Ngày kết thúc (YYYY-MM-DD) - optional
+        month: Tháng cần filter (1-12) - ưu tiên hơn start_date/end_date
         team: Filter theo team (optional)
         vi_tri: Filter theo vị trí (optional)
     
     Returns:
         Dict chứa calendar summary
     """
-    records = await get_task_records(
-        team=team,
-        vi_tri=vi_tri,
-        start_date=start_date,
-        end_date=end_date
-    )
+    # Nếu có month, ưu tiên filter theo month
+    if month:
+        records = await get_task_records(
+            team=team,
+            vi_tri=vi_tri,
+            month=month
+        )
+        date_range = f"Tháng {month}"
+    else:
+        records = await get_task_records(
+            team=team,
+            vi_tri=vi_tri,
+            start_date=start_date,
+            end_date=end_date
+        )
+        date_range = f"{start_date} → {end_date}" if start_date and end_date else "tuần này"
     
     # Group theo ngày
     by_date = {}
@@ -617,7 +679,8 @@ async def generate_content_calendar(
             overdue.append(task)
     
     return {
-        "date_range": f"{start_date} → {end_date}",
+        "date_range": date_range,
+        "month": month,
         "team_filter": team,
         "vi_tri_filter": vi_tri,
         "summary": {
@@ -648,27 +711,11 @@ async def generate_task_summary(
     Returns:
         Dict chứa task summary theo vị trí
     """
-    # Lấy tất cả tasks
-    all_tasks = await get_task_records(vi_tri=vi_tri)
+    # Lấy tasks với filter
+    tasks = await get_task_records(vi_tri=vi_tri, month=month)
     
     now = datetime.now()
     today = now.date()
-    
-    # Filter theo tháng nếu có
-    if month:
-        filtered_tasks = []
-        for task in all_tasks:
-            task_thang = task.get("thang")
-            if task_thang:
-                try:
-                    task_month = int(re.search(r'(\d{1,2})', str(task_thang)).group(1))
-                    if task_month == month:
-                        filtered_tasks.append(task)
-                except:
-                    pass
-        tasks = filtered_tasks
-    else:
-        tasks = all_tasks
     
     # Phân tích theo vị trí
     by_vi_tri = {}
@@ -690,7 +737,7 @@ async def generate_task_summary(
             by_vi_tri[vi_tri_task] = {
                 "total": 0,
                 "overdue": 0,
-                "sap_deadline": 0,  # Trong 3 ngày
+                "sap_deadline": 0,
                 "da_duyet": 0,
                 "chua_duyet": 0,
                 "tasks_overdue": [],
@@ -727,7 +774,7 @@ async def generate_task_summary(
             by_vi_tri[vi_tri_task]["chua_duyet"] += 1
             total_chua_duyet += 1
     
-    # Giới hạn số task trả về để không quá dài
+    # Giới hạn số task trả về
     for vi_tri_key in by_vi_tri:
         by_vi_tri[vi_tri_key]["tasks_overdue"] = by_vi_tri[vi_tri_key]["tasks_overdue"][:5]
         by_vi_tri[vi_tri_key]["tasks_sap_deadline"] = by_vi_tri[vi_tri_key]["tasks_sap_deadline"][:5]

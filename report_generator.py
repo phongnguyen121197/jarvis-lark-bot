@@ -11,40 +11,53 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # ============ PROMPTS ============
-KOC_REPORT_PROMPT = """Dựa trên dữ liệu KOC dưới đây, hãy viết báo cáo ngắn gọn cho Marketing Manager.
+KOC_REPORT_PROMPT = """Bạn là một Brand Manager có 10 năm kinh nghiệm trong ngành mỹ phẩm/nước hoa.
+
+Dựa trên dữ liệu KOC dưới đây, hãy viết báo cáo và đưa ra nhận xét chuyên môn.
 
 Dữ liệu:
 {data}
 
-Yêu cầu:
-- Viết 5-8 bullet points chính
-- Nhấn mạnh số lượng: tổng KOC, đã air, chưa air, chưa có link, chưa gắn giỏ
-- Tổng chi phí deal (format: X,XXX,XXX VNĐ)
-- Nếu có thống kê theo sản phẩm, liệt kê top 3 sản phẩm
-- Giọng văn ngắn gọn, chuyên nghiệp
-- Nếu có vấn đề cần follow-up, đề xuất 2-3 hành động ưu tiên
-- Viết bằng tiếng Việt
-- KHÔNG sử dụng markdown headers (#), chỉ dùng bullet points (•)
+Yêu cầu báo cáo gồm 4 phần:
 
-Ví dụ format:
+**PHẦN 1 - TỔNG QUAN SỐ LIỆU:**
+- Tổng KOC, đã air, chưa air, chưa có link, chưa gắn giỏ
+- Tổng chi phí deal (format: X.XXX.XXX VNĐ)
+
+**PHẦN 2 - THEO PHÂN LOẠI SẢN PHẨM:**
+- Liệt kê TẤT CẢ phân loại với số lượng KOC và chi phí
+
+**PHẦN 3 - NHẬN XÉT TỪ BRAND MANAGER:**
+Với kinh nghiệm 10 năm, hãy nhận xét:
+- Đánh giá hiệu quả chiến dịch KOC (tỷ lệ air, chi phí/KOC)
+- Phân tích vấn đề tồn đọng (KOC chưa air, chưa gắn giỏ...)
+- So sánh hiệu quả giữa các phân loại sản phẩm
+- Cảnh báo rủi ro nếu có (ví dụ: chi phí cao nhưng tỷ lệ air thấp)
+
+**PHẦN 4 - ĐỀ XUẤT HÀNH ĐỘNG:**
+Đưa ra 3-5 đề xuất CỤ THỂ với:
+- Tên/ID KOC cần action (nếu có trong dữ liệu)
+- Deadline đề xuất (trong 24h, 48h, tuần này...)
+- Người/team nên phụ trách
+
+Format output:
 📊 Tóm tắt KOC tháng X:
+• [số liệu]
 
-• Tổng X KOC đã deal
-• Y KOC đã air (Z%)
-• A KOC chưa air
-• B KOC đã air nhưng chưa có link - cần follow up
-• C KOC đã air nhưng chưa gắn giỏ
+📦 Theo phân loại sản phẩm:
+• [phân loại]: X KOC (Y VNĐ)
 
-💰 Chi phí:
-• Tổng chi phí deal: X,XXX,XXX VNĐ
+💼 Nhận xét từ Brand Manager:
+• [nhận xét chuyên môn]
 
-📦 Theo sản phẩm:
-• Sản phẩm A: X KOC (Y VNĐ)
-• Sản phẩm B: X KOC (Y VNĐ)
+🎯 Đề xuất hành động:
+• [hành động cụ thể với tên KOC, deadline]
 
-🎯 Đề xuất:
-• [hành động 1]
-• [hành động 2]
+Lưu ý:
+- Viết bằng tiếng Việt
+- KHÔNG dùng markdown headers (#)
+- Giọng văn chuyên nghiệp nhưng thực tế
+- Nhận xét phải dựa trên DATA, không suy đoán
 """
 
 TASK_SUMMARY_PROMPT = """Dựa trên dữ liệu task dưới đây, hãy viết báo cáo phân tích task theo vị trí.
@@ -139,45 +152,67 @@ Format:
 
 # ============ GENERATORS ============
 async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
-    """Sinh báo cáo KOC từ dữ liệu summary (bao gồm chi phí và sản phẩm)"""
+    """Sinh báo cáo KOC từ dữ liệu summary (bao gồm chi phí và phân loại sản phẩm)"""
     
     # Chuẩn bị data cho prompt
     summary = summary_data.get("summary", {})
     missing_link = summary_data.get("missing_link_kocs", [])
     missing_gio = summary_data.get("missing_gio_kocs", [])
-    by_san_pham = summary_data.get("by_san_pham", {})
+    by_phan_loai = summary_data.get("by_phan_loai", {})
     
     # Format chi phí
     tong_chi_phi = summary.get("tong_chi_phi_deal", 0)
     chi_phi_formatted = f"{int(tong_chi_phi):,}".replace(",", ".") if tong_chi_phi else "0"
     
-    # Format theo sản phẩm
-    san_pham_stats = []
-    for sp, stats in by_san_pham.items():
-        chi_phi_sp = stats.get("chi_phi", 0)
-        chi_phi_sp_formatted = f"{int(chi_phi_sp):,}".replace(",", ".") if chi_phi_sp else "0"
-        san_pham_stats.append({
-            "ten": sp,
+    # Format theo phân loại sản phẩm
+    phan_loai_stats = []
+    for pl, stats in by_phan_loai.items():
+        chi_phi_pl = stats.get("chi_phi", 0)
+        chi_phi_pl_formatted = f"{int(chi_phi_pl):,}".replace(",", ".") if chi_phi_pl else "0"
+        
+        # Lấy danh sách KOC chưa air hoặc cần follow-up trong phân loại này
+        kocs_in_pl = stats.get("kocs", [])
+        kocs_chua_air = [k.get("id_koc") for k in kocs_in_pl if not k.get("da_air")][:3]
+        
+        phan_loai_stats.append({
+            "ten": pl,
             "count": stats.get("count", 0),
             "da_air": stats.get("da_air", 0),
-            "chi_phi": chi_phi_sp_formatted
+            "chua_air": stats.get("chua_air", 0),
+            "chi_phi": chi_phi_pl_formatted,
+            "kocs_chua_air": kocs_chua_air  # KOC cụ thể cần follow
         })
     
     # Sort by count descending
-    san_pham_stats.sort(key=lambda x: x["count"], reverse=True)
+    phan_loai_stats.sort(key=lambda x: x["count"], reverse=True)
+    
+    # Lấy danh sách KOC cụ thể cần follow-up
+    kocs_can_link = [k.get("id_koc") or k.get("id_kenh") for k in missing_link[:5] if k.get("id_koc") or k.get("id_kenh")]
+    kocs_can_gio = [k.get("id_koc") or k.get("id_kenh") for k in missing_gio[:5] if k.get("id_koc") or k.get("id_kenh")]
+    
+    # Tính toán metrics cho Brand Manager phân tích
+    total = summary.get("total", 0)
+    da_air = summary.get("da_air", 0)
+    ty_le_air = round((da_air / total * 100), 1) if total > 0 else 0
+    chi_phi_trung_binh = round(tong_chi_phi / total) if total > 0 else 0
+    chi_phi_tb_formatted = f"{int(chi_phi_trung_binh):,}".replace(",", ".") if chi_phi_trung_binh else "0"
     
     data_for_prompt = {
         "month": summary_data.get("month"),
         "week": summary_data.get("week"),
-        "total": summary.get("total", 0),
-        "da_air": summary.get("da_air", 0),
+        "total": total,
+        "da_air": da_air,
         "chua_air": summary.get("chua_air", 0),
         "da_air_chua_link": summary.get("da_air_chua_link", 0),
         "da_air_chua_gan_gio": summary.get("da_air_chua_gan_gio", 0),
         "tong_chi_phi_deal": chi_phi_formatted,
-        "theo_san_pham": san_pham_stats[:5],  # Top 5 sản phẩm
-        "sample_missing_link": [k.get("id_koc") for k in missing_link[:5]],
-        "sample_missing_gio": [k.get("id_koc") for k in missing_gio[:5]],
+        # Metrics cho Brand Manager
+        "ty_le_air_percent": ty_le_air,
+        "chi_phi_trung_binh_per_koc": chi_phi_tb_formatted,
+        "theo_phan_loai": phan_loai_stats,  # Tất cả phân loại
+        # Danh sách KOC CỤ THỂ cần action
+        "kocs_can_cap_nhat_link": kocs_can_link,
+        "kocs_can_gan_gio": kocs_can_gio,
     }
     
     prompt = KOC_REPORT_PROMPT.format(data=json.dumps(data_for_prompt, ensure_ascii=False, indent=2))
@@ -186,11 +221,11 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Bạn là trợ lý AI chuyên viết báo cáo marketing ngắn gọn, chuyên nghiệp."},
+                {"role": "system", "content": "Bạn là Brand Manager có 10 năm kinh nghiệm trong ngành mỹ phẩm/nước hoa. Bạn có khả năng phân tích dữ liệu KOC sâu sắc, nhận ra các vấn đề tiềm ẩn và đưa ra đề xuất thực tế, cụ thể. Khi đề xuất, LUÔN nêu rõ TÊN/ID KOC, deadline và người phụ trách."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1000
+            max_tokens=1500  # Tăng để có đủ chỗ cho nhận xét
         )
         
         return response.choices[0].message.content
@@ -327,7 +362,9 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
     summary = summary_data.get("summary", {})
     month = summary_data.get("month")
     week = summary_data.get("week")
-    by_san_pham = summary_data.get("by_san_pham", {})
+    by_phan_loai = summary_data.get("by_phan_loai", {})
+    missing_link = summary_data.get("missing_link_kocs", [])
+    missing_gio = summary_data.get("missing_gio_kocs", [])
     
     week_text = f" tuần {week}" if week else ""
     
@@ -335,28 +372,60 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
     tong_chi_phi = summary.get("tong_chi_phi_deal", 0)
     chi_phi_formatted = f"{int(tong_chi_phi):,}".replace(",", ".") if tong_chi_phi else "0"
     
+    # Tính metrics
+    total = summary.get('total', 0)
+    da_air = summary.get('da_air', 0)
+    ty_le_air = round((da_air / total * 100), 1) if total > 0 else 0
+    chi_phi_tb = round(tong_chi_phi / total) if total > 0 else 0
+    chi_phi_tb_fmt = f"{int(chi_phi_tb):,}".replace(",", ".") if chi_phi_tb else "0"
+    
     text = f"""📊 Tóm tắt KOC tháng {month}{week_text}:
 
-• Tổng: {summary.get('total', 0)} KOC đã deal
-• Đã air: {summary.get('da_air', 0)} KOC
+• Tổng: {total} KOC đã deal
+• Đã air: {da_air} KOC ({ty_le_air}%)
 • Chưa air: {summary.get('chua_air', 0)} KOC
 • Đã air nhưng chưa có link: {summary.get('da_air_chua_link', 0)} KOC
 • Đã air nhưng chưa gắn giỏ: {summary.get('da_air_chua_gan_gio', 0)} KOC
 
 💰 Chi phí:
-• Tổng chi phí deal: {chi_phi_formatted} VNĐ"""
+• Tổng chi phí deal: {chi_phi_formatted} VNĐ
+• Chi phí trung bình/KOC: {chi_phi_tb_fmt} VNĐ"""
     
-    # Thêm thống kê theo sản phẩm nếu có
-    if by_san_pham:
-        text += "\n\n📦 Theo sản phẩm:"
-        sorted_sp = sorted(by_san_pham.items(), key=lambda x: x[1].get("count", 0), reverse=True)
-        for sp, stats in sorted_sp[:5]:
-            chi_phi_sp = stats.get("chi_phi", 0)
-            chi_phi_sp_fmt = f"{int(chi_phi_sp):,}".replace(",", ".") if chi_phi_sp else "0"
-            text += f"\n• {sp}: {stats.get('count', 0)} KOC ({chi_phi_sp_fmt} VNĐ)"
+    # Thêm thống kê theo phân loại sản phẩm
+    if by_phan_loai:
+        text += "\n\n📦 Theo phân loại sản phẩm:"
+        sorted_pl = sorted(by_phan_loai.items(), key=lambda x: x[1].get("count", 0), reverse=True)
+        for pl, stats in sorted_pl:
+            chi_phi_pl = stats.get("chi_phi", 0)
+            chi_phi_pl_fmt = f"{int(chi_phi_pl):,}".replace(",", ".") if chi_phi_pl else "0"
+            text += f"\n• {pl}: {stats.get('count', 0)} KOC ({chi_phi_pl_fmt} VNĐ)"
     
+    # Nhận xét Brand Manager (simple version)
+    text += "\n\n💼 Nhận xét từ Brand Manager:"
+    if ty_le_air >= 90:
+        text += f"\n• Tỷ lệ air {ty_le_air}% rất tốt, chiến dịch đang đi đúng hướng"
+    elif ty_le_air >= 70:
+        text += f"\n• Tỷ lệ air {ty_le_air}% ở mức khá, cần đẩy nhanh tiến độ"
+    else:
+        text += f"\n• ⚠️ Tỷ lệ air {ty_le_air}% thấp, cần review lại quy trình"
+    
+    chua_gan_gio = summary.get('da_air_chua_gan_gio', 0)
+    if chua_gan_gio > 0:
+        text += f"\n• ⚠️ {chua_gan_gio} KOC chưa gắn giỏ = mất cơ hội chuyển đổi"
+    
+    # Đề xuất CỤ THỂ với tên KOC
     if summary.get('da_air_chua_link', 0) > 0 or summary.get('da_air_chua_gan_gio', 0) > 0:
-        text += "\n\n🎯 Đề xuất:\n• Follow up các KOC chưa có link\n• Nhắc KOC gắn giỏ hàng"
+        text += "\n\n🎯 Đề xuất hành động:"
+        
+        if missing_link:
+            koc_names = [k.get("id_koc") or k.get("id_kenh") for k in missing_link[:3] if k.get("id_koc") or k.get("id_kenh")]
+            if koc_names:
+                text += f"\n• [Trong 24h] Cập nhật link air: {', '.join(koc_names)}"
+        
+        if missing_gio:
+            koc_names = [k.get("id_koc") or k.get("id_kenh") for k in missing_gio[:3] if k.get("id_koc") or k.get("id_kenh")]
+            if koc_names:
+                text += f"\n• [Trong 48h] Follow-up gắn giỏ: {', '.join(koc_names)}"
     
     return text
 
