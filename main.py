@@ -258,7 +258,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.0"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.1"}
 
 @app.get("/health")
 async def health():
@@ -275,6 +275,12 @@ async def test_intent(q: str = "tóm tắt KOC tháng 12"):
     """Test intent classifier"""
     result = classify_intent(q)
     return result
+
+@app.get("/debug/booking-fields")
+async def debug_booking_fields_endpoint():
+    """Debug: Xem tất cả fields từ bảng Booking"""
+    from lark_base import debug_booking_fields
+    return await debug_booking_fields()
 
 # ============ RUN ============
 if __name__ == "__main__":

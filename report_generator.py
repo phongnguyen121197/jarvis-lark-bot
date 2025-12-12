@@ -149,7 +149,8 @@ async def generate_content_calendar_text(calendar_data: Dict[str, Any]) -> str:
         "overdue_samples": [t.get("du_an") for t in overdue[:5]],
     }
     
-    prompt = CONTENT_CALENDAR_PROMPT.format(
+    date_range = calendar_data.get("date_range", "tuần này")
+    prompt = CONTENT_CALENDAR_PROMPT.replace("{date_range}", date_range).format(
         data=json.dumps(data_for_prompt, ensure_ascii=False, indent=2)
     )
     
