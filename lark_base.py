@@ -160,18 +160,42 @@ def find_phan_loai_field(fields: Dict) -> Optional[str]:
         "Phan loai sp",
     ]
     
+    value = None
+    
     # Thử tìm exact match trước
     for name in possible_names:
         if name in fields:
-            return fields.get(name)
+            value = fields.get(name)
+            break
     
-    # Thử tìm field có chứa "phân loại" hoặc "phan loai"
-    for key in fields.keys():
-        key_lower = key.lower()
-        if "phân loại" in key_lower or "phan loai" in key_lower:
-            return fields.get(key)
+    # Nếu chưa tìm thấy, thử tìm field có chứa "phân loại"
+    if value is None:
+        for key in fields.keys():
+            key_lower = key.lower()
+            if "phân loại" in key_lower or "phan loai" in key_lower:
+                value = fields.get(key)
+                break
     
-    return None
+    # Xử lý giá trị - có thể là list, dict, hoặc string
+    if value is None:
+        return None
+    
+    if isinstance(value, str):
+        return value
+    
+    if isinstance(value, list):
+        # Nếu là list, lấy phần tử đầu tiên
+        if len(value) > 0:
+            first = value[0]
+            if isinstance(first, dict):
+                return first.get("text") or first.get("value") or str(first)
+            return str(first)
+        return None
+    
+    if isinstance(value, dict):
+        return value.get("text") or value.get("value") or str(value)
+    
+    return str(value) if value else None
 
 
 def extract_field_value(fields: Dict, field_name: str, default=None):
@@ -569,7 +593,23 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
                 pass
         
         # === Theo phân loại sản phẩm ===
-        phan_loai = koc.get("phan_loai_san_pham") or koc.get("san_pham") or "Không xác định"
+        phan_loai_raw = koc.get("phan_loai_san_pham") or koc.get("san_pham") or "Không xác định"
+        
+        # Đảm bảo phan_loai là string (không phải list)
+        if isinstance(phan_loai_raw, list):
+            if len(phan_loai_raw) > 0:
+                first = phan_loai_raw[0]
+                if isinstance(first, dict):
+                    phan_loai = first.get("text") or first.get("value") or str(first)
+                else:
+                    phan_loai = str(first)
+            else:
+                phan_loai = "Không xác định"
+        elif isinstance(phan_loai_raw, dict):
+            phan_loai = phan_loai_raw.get("text") or phan_loai_raw.get("value") or str(phan_loai_raw)
+        else:
+            phan_loai = str(phan_loai_raw) if phan_loai_raw else "Không xác định"
+        
         if phan_loai not in by_phan_loai:
             by_phan_loai[phan_loai] = {
                 "count": 0,
