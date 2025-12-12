@@ -6,6 +6,7 @@ import os
 import json
 import base64
 import hashlib
+import time
 from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import CBC
@@ -32,6 +33,27 @@ LARK_VERIFICATION_TOKEN = os.getenv("LARK_VERIFICATION_TOKEN")
 LARK_API_BASE = "https://open.larksuite.com/open-apis"
 TENANT_ACCESS_TOKEN_URL = f"{LARK_API_BASE}/auth/v3/tenant_access_token/internal"
 SEND_MESSAGE_URL = f"{LARK_API_BASE}/im/v1/messages"
+
+# Message deduplication cache
+_processed_messages = {}
+MESSAGE_CACHE_TTL = 300  # 5 minutes
+
+def is_message_processed(message_id: str) -> bool:
+    """Check if message was already processed"""
+    now = time.time()
+    
+    # Clean up old entries
+    expired = [mid for mid, ts in _processed_messages.items() if now - ts > MESSAGE_CACHE_TTL]
+    for mid in expired:
+        del _processed_messages[mid]
+    
+    # Check if already processed
+    if message_id in _processed_messages:
+        return True
+    
+    # Mark as processed
+    _processed_messages[message_id] = now
+    return False
 
 # ============ APP ============
 app = FastAPI(title="Jarvis - Lark AI Report Assistant")
@@ -219,6 +241,14 @@ async def handle_lark_events(request: Request):
 async def handle_message_event(event: dict):
     message = event.get("message", {})
     
+    # Get message_id for deduplication
+    message_id = message.get("message_id")
+    
+    # Check if already processed
+    if message_id and is_message_processed(message_id):
+        print(f"⏭️ Duplicate message {message_id}, skipping")
+        return
+    
     chat_id = message.get("chat_id")
     message_type = message.get("message_type")
     content_str = message.get("content", "{}")
@@ -258,7 +288,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.3"}
 
 @app.get("/health")
 async def health():
@@ -281,6 +311,31 @@ async def debug_booking_fields_endpoint():
     """Debug: Xem tất cả fields từ bảng Booking"""
     from lark_base import debug_booking_fields
     return await debug_booking_fields()
+
+@app.get("/debug/task-fields")
+async def debug_task_fields_endpoint():
+    """Debug: Xem tất cả fields từ bảng Task"""
+    from lark_base import debug_task_fields
+    return await debug_task_fields()
+
+@app.get("/test/koc-filter")
+async def test_koc_filter(month: int = 12):
+    """Test KOC filter by month"""
+    from lark_base import get_booking_records
+    records = await get_booking_records(month=month)
+    
+    return {
+        "month": month,
+        "total_records": len(records),
+        "sample": [
+            {
+                "id_koc": r.get("id_koc"),
+                "thang_air": r.get("thang_air"),
+                "link_air": bool(r.get("link_air_bai"))
+            }
+            for r in records[:5]
+        ]
+    }
 
 # ============ RUN ============
 if __name__ == "__main__":

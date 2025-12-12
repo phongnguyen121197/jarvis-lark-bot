@@ -52,7 +52,7 @@ Yêu cầu:
 - KHÔNG sử dụng markdown headers (#), chỉ dùng bullet points (•)
 
 Ví dụ format:
-📅 Lịch content {date_range}:
+📅 Lịch content tuần này:
 
 • Tổng X task trong tuần
 • Team Content: Y task
@@ -140,17 +140,17 @@ async def generate_content_calendar_text(calendar_data: Dict[str, Any]) -> str:
     summary = calendar_data.get("summary", {})
     by_team = calendar_data.get("by_team", {})
     overdue = calendar_data.get("overdue_tasks", [])
+    date_range = calendar_data.get("date_range", "tuần này")
     
     data_for_prompt = {
-        "date_range": calendar_data.get("date_range"),
+        "date_range": date_range,
         "total_tasks": summary.get("total_tasks", 0),
         "total_overdue": summary.get("total_overdue", 0),
         "teams": {team: len(tasks) for team, tasks in by_team.items()},
         "overdue_samples": [t.get("du_an") for t in overdue[:5]],
     }
     
-    date_range = calendar_data.get("date_range", "tuần này")
-    prompt = CONTENT_CALENDAR_PROMPT.replace("{date_range}", date_range).format(
+    prompt = CONTENT_CALENDAR_PROMPT.format(
         data=json.dumps(data_for_prompt, ensure_ascii=False, indent=2)
     )
     

@@ -206,96 +206,103 @@ async def get_booking_records(
         max_records=500
     )
     
+    def parse_lark_value(value):
+        """Parse giá trị từ Lark API, xử lý các format khác nhau"""
+        if value is None:
+            return None
+        
+        # Nếu là string đơn giản
+        if isinstance(value, str):
+            return value
+        
+        # Nếu là số
+        if isinstance(value, (int, float)):
+            return value
+        
+        # Nếu là list (thường là [{'text': 'value', 'type': 'text'}])
+        if isinstance(value, list):
+            if len(value) == 0:
+                return None
+            first = value[0]
+            if isinstance(first, dict):
+                return first.get("text") or first.get("value") or first.get("name")
+            return first
+        
+        # Nếu là dict (thường là link hoặc object)
+        if isinstance(value, dict):
+            return value.get("text") or value.get("link") or value.get("value")
+        
+        return str(value)
+    
+    def extract_month(value) -> Optional[int]:
+        """Extract tháng từ giá trị, trả về int 1-12"""
+        parsed = parse_lark_value(value)
+        if parsed is None:
+            return None
+        
+        parsed_str = str(parsed)
+        
+        # Tìm số trong string
+        match = re.search(r'(\d{1,2})', parsed_str)
+        if match:
+            month_val = int(match.group(1))
+            if 1 <= month_val <= 12:
+                return month_val
+        return None
+    
     results = []
+    skipped_wrong_month = 0
+    total_records = len(records)
+    
+    print(f"📥 Fetched {total_records} total records from Lark Base")
+    
+    # Debug: Log first 3 records' month values
+    for i, record in enumerate(records[:3]):
+        fields = record.get("fields", {})
+        raw_month = fields.get("Tháng air")
+        parsed_month = extract_month(raw_month)
+        print(f"   Record {i}: Tháng air raw={raw_month}, parsed={parsed_month}")
+    
     for record in records:
         fields = record.get("fields", {})
         
-        # Tìm các field theo pattern (vì tên field có thể khác)
-        def find_field(patterns: list, fields: dict):
-            """Tìm field value theo list patterns"""
-            for key, value in fields.items():
-                key_lower = key.lower()
-                for pattern in patterns:
-                    if pattern.lower() in key_lower:
-                        return value
-            return None
-        
-        # Extract các field quan trọng với pattern matching
+        # Extract với đúng tên field từ API
         koc_data = {
             "record_id": record.get("record_id"),
-            "id_koc": find_field(["id koc", "id_koc", "koc"], fields) or find_field(["tên", "name"], fields),
-            "thang_deal": find_field(["tháng deal", "thang deal", "month deal"], fields),
-            "tuan_deal": find_field(["tuần deal", "tuan deal", "week deal"], fields),
-            "thang_air": find_field(["tháng air", "thang air", "tháng dự kiến"], fields),
-            "tuan_air": find_field(["tuần air", "tuan air", "tuần báo cáo"], fields),
-            "du_kien_air": find_field(["dự kiến air", "du kien air"], fields),
-            "thoi_gian_air_video": find_field(["thời gian air video", "ngày air"], fields),
-            "link_air_bai": find_field(["link air", "link bài"], fields),
-            "trang_thai_gan_gio": find_field(["trạng thái gắn giỏ", "gắn giỏ", "gan gio"], fields),
-            "ngay_gan_gio": find_field(["ngày gắn giỏ"], fields),
-            "nhan_su_book": find_field(["nhân sự book", "người book"], fields),
-            "san_pham": find_field(["sản phẩm", "product"], fields),
-            "trang_thai": find_field(["trạng thái"], fields),
-            "luot_xem": find_field(["lượt xem", "view"], fields),
-            "raw_fields": fields  # Giữ lại để debug
+            "id_koc": parse_lark_value(fields.get("ID KOC")),
+            "id_kenh": parse_lark_value(fields.get("ID kênh")),
+            "thang_air": extract_month(fields.get("Tháng air")),
+            "thoi_gian_air": fields.get("Thời gian air"),
+            "thoi_gian_air_video": parse_lark_value(fields.get("Thời gian air video")),
+            "link_air_bai": parse_lark_value(fields.get("Link air bài")),
+            "trang_thai_gan_gio": fields.get("Trạng thái gắn giỏ"),
+            "ngay_gan_gio": parse_lark_value(fields.get("Ngày gắn giỏ")),
+            "nhan_su_book": parse_lark_value(fields.get("Nhân sự book")),
+            "san_pham": fields.get("Sản phẩm"),
+            "status": parse_lark_value(fields.get("Status")),
+            "luot_xem": parse_lark_value(fields.get("Lượt xem hiện tại")),
+            "da_air": fields.get("Đã air"),
+            "da_nhan": fields.get("Đã nhận"),
+            "da_di_don": fields.get("Đã đi đơn"),
         }
         
         # Filter theo tháng nếu có
-        if month:
-            # Ưu tiên tháng deal, nếu không có thì dùng tháng air
-            koc_month = koc_data.get("thang_deal") or koc_data.get("thang_air")
+        if month is not None:
+            koc_month = koc_data.get("thang_air")
             
-            if koc_month is not None:
-                try:
-                    # Xử lý nhiều định dạng: số, string "12", hoặc list
-                    if isinstance(koc_month, (int, float)):
-                        month_val = int(koc_month)
-                    elif isinstance(koc_month, str):
-                        # Tìm số trong string
-                        import re
-                        match = re.search(r'(\d+)', str(koc_month))
-                        month_val = int(match.group(1)) if match else None
-                    elif isinstance(koc_month, list) and len(koc_month) > 0:
-                        # Nếu là list, lấy phần tử đầu
-                        first = koc_month[0]
-                        if isinstance(first, dict):
-                            month_val = first.get("text") or first.get("value")
-                        else:
-                            month_val = first
-                        if month_val:
-                            match = re.search(r'(\d+)', str(month_val))
-                            month_val = int(match.group(1)) if match else None
-                    else:
-                        month_val = None
-                    
-                    if month_val is not None and month_val != month:
-                        continue  # Skip record không đúng tháng
-                except Exception as e:
-                    print(f"Month parse error: {e}, value: {koc_month}")
-        
-        # Filter theo tuần nếu có
-        if week:
-            koc_week = koc_data.get("tuan_air") or koc_data.get("tuan_deal")
-            if koc_week:
-                week_str = f"Tuần {week}"
-                week_match = False
-                
-                if isinstance(koc_week, str):
-                    week_match = week_str.lower() in koc_week.lower() or str(week) == koc_week
-                elif isinstance(koc_week, list):
-                    for item in koc_week:
-                        if isinstance(item, dict):
-                            item_text = item.get("text", "")
-                        else:
-                            item_text = str(item)
-                        if week_str.lower() in item_text.lower():
-                            week_match = True
-                            break
-                
-                if not week_match:
-                    continue
+            # Nếu không có tháng air, skip record này
+            if koc_month is None:
+                skipped_wrong_month += 1
+                continue
+            
+            # So sánh tháng
+            if koc_month != month:
+                skipped_wrong_month += 1
+                continue
         
         results.append(koc_data)
+    
+    print(f"📊 Filter result: {len(results)} records match month={month}, skipped {skipped_wrong_month}")
     
     return results
 
@@ -394,12 +401,13 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
     missing_gio_kocs = []
     
     for koc in records:
-        # Kiểm tra đã air chưa
+        # Kiểm tra đã air chưa - dựa trên link air hoặc thời gian air
         link_air = koc.get("link_air_bai")
         thoi_gian_air = koc.get("thoi_gian_air_video")
-        trang_thai_gio = koc.get("trang_thai_gan_gio")
+        da_air_field = koc.get("da_air")
         
-        has_aired = bool(link_air or thoi_gian_air)
+        # Coi là đã air nếu có link HOẶC có thời gian air HOẶC field "Đã air" có giá trị
+        has_aired = bool(link_air or thoi_gian_air or da_air_field)
         
         if has_aired:
             da_air += 1
@@ -410,12 +418,18 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
                 missing_link_kocs.append(koc)
             
             # Đã air nhưng chưa gắn giỏ
+            trang_thai_gio = koc.get("trang_thai_gan_gio")
             if trang_thai_gio:
                 trang_thai_str = str(trang_thai_gio).lower()
-                if "chưa" in trang_thai_str or trang_thai_str == "":
+                if "chưa" in trang_thai_str or "chua" in trang_thai_str:
+                    da_air_chua_gan_gio += 1
+                    missing_gio_kocs.append(koc)
+                elif "không" in trang_thai_str or "khong" in trang_thai_str:
+                    # Không gắn giỏ cũng tính
                     da_air_chua_gan_gio += 1
                     missing_gio_kocs.append(koc)
             else:
+                # Không có trạng thái = chưa gắn
                 da_air_chua_gan_gio += 1
                 missing_gio_kocs.append(koc)
         else:
@@ -547,6 +561,35 @@ async def debug_booking_fields():
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
+        max_records=3
+    )
+    
+    result = {
+        "total_sample": len(records),
+        "fields": {},
+        "sample_records": []
+    }
+    
+    if records:
+        # Lấy tất cả field names
+        all_fields = list(records[0].get("fields", {}).keys())
+        result["all_field_names"] = all_fields
+        
+        # Lấy sample values cho mỗi field
+        for record in records:
+            fields = record.get("fields", {})
+            sample = {}
+            for key, value in fields.items():
+                sample[key] = str(value)[:100] if value else None
+            result["sample_records"].append(sample)
+    
+    return result
+
+async def debug_task_fields():
+    """Debug: Xem tất cả fields và sample values từ Task table"""
+    records = await get_all_records(
+        app_token=TASK_BASE["app_token"],
+        table_id=TASK_BASE["table_id"],
         max_records=3
     )
     
