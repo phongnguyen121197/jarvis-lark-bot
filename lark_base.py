@@ -146,6 +146,34 @@ async def get_all_records(
     return all_records[:max_records]
 
 # ============ BOOKING/KOC HELPERS ============
+def find_phan_loai_field(fields: Dict) -> Optional[str]:
+    """
+    Tìm field phân loại sản phẩm trong record.
+    Thử nhiều tên có thể: "Phân loại sp", "Phân loại sản phẩm", etc.
+    """
+    # Danh sách các tên field có thể (ưu tiên exact match)
+    possible_names = [
+        "Phân loại sp (Chỉ được chọn - Không được add mới)",  # Tên chính xác
+        "Phân loại sản phẩm",
+        "Phân loại sp",
+        "Phan loai san pham",
+        "Phan loai sp",
+    ]
+    
+    # Thử tìm exact match trước
+    for name in possible_names:
+        if name in fields:
+            return fields.get(name)
+    
+    # Thử tìm field có chứa "phân loại" hoặc "phan loai"
+    for key in fields.keys():
+        key_lower = key.lower()
+        if "phân loại" in key_lower or "phan loai" in key_lower:
+            return fields.get(key)
+    
+    return None
+
+
 def extract_field_value(fields: Dict, field_name: str, default=None):
     """Extract giá trị từ field, xử lý các loại field khác nhau"""
     value = fields.get(field_name)
@@ -315,7 +343,8 @@ async def get_booking_records(
             "ngay_gan_gio": parse_lark_value(fields.get("Ngày gắn giỏ")),
             "nhan_su_book": parse_lark_value(fields.get("Nhân sự book")),
             "san_pham": fields.get("Sản phẩm"),
-            "phan_loai_san_pham": fields.get("Phân loại sản phẩm"),  # Thêm field này
+            # Tìm field phân loại sản phẩm - thử nhiều tên có thể
+            "phan_loai_san_pham": find_phan_loai_field(fields),
             "status": parse_lark_value(fields.get("Status")),
             "luot_xem": parse_lark_value(fields.get("Lượt xem hiện tại")),
             "da_air": fields.get("Đã air"),

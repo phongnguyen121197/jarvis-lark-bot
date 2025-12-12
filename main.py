@@ -296,7 +296,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.9"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.9.2"}
 
 @app.get("/health")
 async def health():
@@ -382,6 +382,42 @@ async def debug_month_distribution():
         "unique_month_values": len(month_values),
         "distribution": month_values
     }
+
+
+@app.get("/debug/all-field-names")
+async def debug_all_field_names():
+    """Debug: Xem TẤT CẢ field names từ Booking table"""
+    from lark_base import get_all_records, BOOKING_BASE
+    
+    records = await get_all_records(
+        app_token=BOOKING_BASE["app_token"],
+        table_id=BOOKING_BASE["table_id"],
+        max_records=5
+    )
+    
+    if not records:
+        return {"error": "No records found"}
+    
+    # Collect all field names
+    all_fields = set()
+    for record in records:
+        fields = record.get("fields", {})
+        all_fields.update(fields.keys())
+    
+    # Show sample values for product-related fields
+    sample_record = records[0].get("fields", {})
+    product_fields = {}
+    for key in all_fields:
+        if any(x in key.lower() for x in ["sản phẩm", "san pham", "phân loại", "phan loai", "product", "category"]):
+            product_fields[key] = sample_record.get(key)
+    
+    return {
+        "total_fields": len(all_fields),
+        "all_field_names": sorted(list(all_fields)),
+        "product_related_fields": product_fields,
+        "sample_record": sample_record
+    }
+
 
 # ============ RUN ============
 if __name__ == "__main__":
