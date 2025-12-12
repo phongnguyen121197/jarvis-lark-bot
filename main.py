@@ -1,11 +1,14 @@
 import os
 import json
-import hashlib
 import base64
+import hashlib
+from cryptography.hazmat.primitives.ciphers import Cipher
+from cryptography.hazmat.primitives.ciphers.algorithms import AES
+from cryptography.hazmat.primitives.ciphers.modes import CBC
+from cryptography.hazmat.backends import default_backend
 from typing import Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 import httpx
 from dotenv import load_dotenv
 
@@ -25,6 +28,29 @@ SEND_MESSAGE_URL = f"{LARK_API_BASE}/im/v1/messages"
 
 # ============ APP ============
 app = FastAPI(title="Jarvis - Lark AI Report Assistant")
+
+# ============ DECRYPT LARK MESSAGE ============
+class LarkDecryptor:
+    def __init__(self, encrypt_key: str):
+        key = hashlib.sha256(encrypt_key.encode()).digest()
+        self.key = key
+    
+    def decrypt(self, encrypted_data: str) -> str:
+        encrypted_bytes = base64.b64decode(encrypted_data)
+        iv = encrypted_bytes[:16]
+        encrypted_content = encrypted_bytes[16:]
+        
+        cipher = Cipher(AES(self.key), CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(encrypted_content) + decryptor.finalize()
+        
+        # Remove PKCS7 padding
+        padding_len = decrypted[-1]
+        decrypted = decrypted[:-padding_len]
+        
+        return decrypted.decode('utf-8')
+
+decryptor = LarkDecryptor(LARK_ENCRYPT_KEY) if LARK_ENCRYPT_KEY else None
 
 # ============ LARK AUTH ============
 async def get_tenant_access_token() -> str:
@@ -71,7 +97,17 @@ async def handle_lark_events(request: Request):
     body = await request.json()
     
     # Debug log
-    print(f"📩 Received event: {json.dumps(body, indent=2, ensure_ascii=False)}")
+    print(f"📩 Received raw event: {json.dumps(body, indent=2, ensure_ascii=False)}")
+    
+    # Decrypt if encrypted
+    if "encrypt" in body and decryptor:
+        try:
+            decrypted_str = decryptor.decrypt(body["encrypt"])
+            body = json.loads(decrypted_str)
+            print(f"🔓 Decrypted event: {json.dumps(body, indent=2, ensure_ascii=False)}")
+        except Exception as e:
+            print(f"❌ Decrypt failed: {e}")
+            raise HTTPException(status_code=400, detail="Decrypt failed")
     
     # 1. URL Verification (Lark gửi khi setup webhook)
     if "challenge" in body:
@@ -83,8 +119,9 @@ async def handle_lark_events(request: Request):
     event = body.get("event", {})
     
     # Verify token
-    if header.get("token") != LARK_VERIFICATION_TOKEN:
-        print("❌ Token verification failed")
+    token = header.get("token")
+    if token and token != LARK_VERIFICATION_TOKEN:
+        print(f"❌ Token verification failed: got {token}")
         raise HTTPException(status_code=401, detail="Invalid token")
     
     event_type = header.get("event_type")
