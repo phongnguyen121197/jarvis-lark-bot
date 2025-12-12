@@ -11,6 +11,7 @@ INTENT_KOC_REPORT = "KOC_REPORT"
 INTENT_CONTENT_CALENDAR = "CONTENT_CALENDAR_SUMMARY"
 INTENT_TASK_SUMMARY = "TASK_SUMMARY"  # Phân tích task theo vị trí
 INTENT_GENERAL_SUMMARY = "GENERAL_SUMMARY"
+INTENT_GPT_CHAT = "GPT_CHAT"  # Hỏi ChatGPT trực tiếp
 INTENT_UNKNOWN = "UNKNOWN"
 
 # ============ KEYWORDS ============
@@ -29,6 +30,18 @@ TASK_KEYWORDS = [
     "task", "deadline", "quá hạn", "qua han", "overdue", "trễ hạn", "tre han",
     "vị trí", "vi tri", "hr", "ecommerce", "content creator",
     "sắp deadline", "sap deadline", "công việc", "phân tích task"
+]
+
+# Keywords để gọi GPT trực tiếp
+GPT_KEYWORDS = [
+    "gpt", "chatgpt", "hỏi gpt", "hoi gpt", "ask gpt",
+    "ai:", "gpt:", "hỏi ai", "hoi ai"
+]
+
+# Tên các phân loại sản phẩm cụ thể (brands)
+BRAND_KEYWORDS = [
+    "dark beauty", "lady killer", "ladykiller", "venus", 
+    "kalle", "dark", "lady", "killer"
 ]
 
 # Vị trí cụ thể
@@ -132,6 +145,32 @@ def get_current_week_range() -> tuple:
     )
 
 # ============ CLASSIFIER ============
+def extract_gpt_question(text: str) -> str:
+    """
+    Trích xuất câu hỏi cho GPT từ text.
+    Loại bỏ prefix như "gpt:", "hỏi gpt", etc.
+    """
+    text_lower = text.lower()
+    
+    # Các pattern cần loại bỏ
+    prefixes = [
+        r'^gpt[:\s]+',
+        r'^chatgpt[:\s]+',
+        r'^hỏi gpt[:\s]+',
+        r'^hoi gpt[:\s]+',
+        r'^ask gpt[:\s]+',
+        r'^ai[:\s]+',
+        r'^hỏi ai[:\s]+',
+        r'^hoi ai[:\s]+',
+    ]
+    
+    result = text
+    for prefix in prefixes:
+        result = re.sub(prefix, '', result, flags=re.IGNORECASE)
+    
+    return result.strip()
+
+
 def classify_intent(text: str) -> Dict[str, Any]:
     """
     Phân loại intent từ câu hỏi
@@ -143,6 +182,19 @@ def classify_intent(text: str) -> Dict[str, Any]:
         Dict chứa intent và các parameters
     """
     text_lower = text.lower()
+    
+    # ========== CHECK GPT CHAT FIRST ==========
+    # Ưu tiên cao nhất: Nếu user muốn hỏi GPT trực tiếp
+    gpt_triggers = ["gpt:", "chatgpt:", "hỏi gpt", "hoi gpt", "ask gpt", "ai:", "hỏi ai", "hoi ai"]
+    is_gpt_chat = any(trigger in text_lower for trigger in gpt_triggers)
+    
+    if is_gpt_chat:
+        question = extract_gpt_question(text)
+        return {
+            "intent": INTENT_GPT_CHAT,
+            "question": question,
+            "original_text": text
+        }
     
     # Count keywords
     koc_score = sum(1 for kw in KOC_KEYWORDS if kw in text_lower)
@@ -163,6 +215,9 @@ def classify_intent(text: str) -> Dict[str, Any]:
         "phân tích task", "vị trí", "vi tri"
     ])
     
+    # Check if asking about specific brand (Dark Beauty, Lady Killer, etc.)
+    is_brand_specific = any(brand in text_lower for brand in BRAND_KEYWORDS)
+    
     # Parse time info
     month = parse_month(text)
     week = parse_week(text)
@@ -177,12 +232,18 @@ def classify_intent(text: str) -> Dict[str, Any]:
     
     # 1. KOC Report - ưu tiên cao nhất khi có từ khóa KOC
     if koc_score > 0 and koc_score >= content_score:
+        # Quyết định group_by:
+        # - "brand" nếu hỏi cụ thể Dark Beauty, Lady Killer, etc.
+        # - "product" mặc định (Nước hoa, Box quà)
+        group_by = "brand" if is_brand_specific else "product"
+        
         return {
             "intent": INTENT_KOC_REPORT,
             "month": month if month else current_month,
             "week": week,
             "year": year,
             "filters": extract_koc_filters(text_lower),
+            "group_by": group_by,  # "product" hoặc "brand"
             "original_text": text
         }
     

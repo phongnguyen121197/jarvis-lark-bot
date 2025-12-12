@@ -20,9 +20,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import modules
-from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_UNKNOWN
+from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_GPT_CHAT, INTENT_UNKNOWN
 from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, test_connection
-from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text
+from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, chat_with_gpt
 
 # ============ CONFIG ============
 LARK_APP_ID = os.getenv("LARK_APP_ID")
@@ -36,7 +36,7 @@ SEND_MESSAGE_URL = f"{LARK_API_BASE}/im/v1/messages"
 
 # Message deduplication cache
 _processed_messages = {}
-MESSAGE_CACHE_TTL = 300  # 5 minutes
+MESSAGE_CACHE_TTL = 600  # 10 minutes (tăng từ 5 phút)
 
 def is_message_processed(message_id: str) -> bool:
     """Check if message was already processed"""
@@ -48,6 +48,15 @@ def is_message_processed(message_id: str) -> bool:
         del _processed_messages[mid]
     
     # Check if already processed
+    if message_id in _processed_messages:
+        return True
+    
+    return False
+
+
+def mark_message_processed(message_id: str):
+    """Mark message as processed"""
+    _processed_messages[message_id] = time.time()
     if message_id in _processed_messages:
         return True
     
@@ -136,9 +145,10 @@ async def process_jarvis_query(text: str) -> str:
         if intent == INTENT_KOC_REPORT:
             month = intent_result.get("month")
             week = intent_result.get("week")
+            group_by = intent_result.get("group_by", "product")  # "product" hoặc "brand"
             
             # Lấy dữ liệu từ Lark Base
-            summary_data = await generate_koc_summary(month=month, week=week)
+            summary_data = await generate_koc_summary(month=month, week=week, group_by=group_by)
             
             # Sinh báo cáo
             report = await generate_koc_report_text(summary_data)
@@ -187,6 +197,15 @@ async def process_jarvis_query(text: str) -> str:
             report = await generate_general_summary_text(koc_data, content_data)
             return report
         
+        elif intent == INTENT_GPT_CHAT:
+            # Gọi ChatGPT trực tiếp
+            question = intent_result.get("question", "")
+            if not question:
+                return "❓ Bạn muốn hỏi gì? Hãy thử: \"GPT: câu hỏi của bạn\""
+            
+            response = await chat_with_gpt(question)
+            return f"🤖 GPT trả lời:\n\n{response}"
+        
         else:
             # Unknown intent
             return intent_result.get("suggestion", 
@@ -196,7 +215,8 @@ async def process_jarvis_query(text: str) -> str:
                 "• Chi phí KOC: \"Chi phí KOC tháng 12 theo sản phẩm\"\n"
                 "• Lịch content: \"Lịch content tuần này\"\n"
                 "• Phân tích task: \"Task quá hạn theo vị trí\"\n"
-                "• Tổng hợp: \"Summary tuần này\"\n\n"
+                "• Tổng hợp: \"Summary tuần này\"\n"
+                "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
                 "Hãy thử hỏi tôi nhé! 😊"
             )
     
@@ -257,6 +277,10 @@ async def handle_message_event(event: dict):
         print(f"⏭️ Duplicate message {message_id}, skipping")
         return
     
+    # Mark as processed IMMEDIATELY to prevent duplicate processing
+    if message_id:
+        mark_message_processed(message_id)
+    
     chat_id = message.get("chat_id")
     message_type = message.get("message_type")
     content_str = message.get("content", "{}")
@@ -289,6 +313,11 @@ async def handle_message_event(event: dict):
     # Process query
     response_text = await process_jarvis_query(clean_text or text)
     
+    # Double check before sending (in case of race condition)
+    if message_id and is_message_processed(message_id):
+        # Already sent by another process
+        pass
+    
     # Send response
     await send_lark_message(chat_id, response_text)
     print(f"✅ Response sent")
@@ -296,7 +325,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.9.3"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.1"}
 
 @app.get("/health")
 async def health():

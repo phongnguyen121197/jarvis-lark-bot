@@ -24,14 +24,14 @@ Yêu cầu báo cáo gồm 4 phần:
 - Tổng KOC, đã air, chưa air, chưa có link, chưa gắn giỏ
 - Tổng chi phí deal (format: X.XXX.XXX VNĐ)
 
-**PHẦN 2 - THEO PHÂN LOẠI SẢN PHẨM:**
-- Liệt kê TẤT CẢ phân loại với số lượng KOC và chi phí
+**PHẦN 2 - THEO GROUP (xem field group_label để biết nhóm theo gì):**
+- Liệt kê TẤT CẢ items trong theo_group với số lượng KOC và chi phí
 
 **PHẦN 3 - NHẬN XÉT TỪ BRAND MANAGER:**
 Với kinh nghiệm 10 năm, hãy nhận xét:
 - Đánh giá hiệu quả chiến dịch KOC (tỷ lệ air, chi phí/KOC)
 - Phân tích vấn đề tồn đọng (KOC chưa air, chưa gắn giỏ...)
-- So sánh hiệu quả giữa các phân loại sản phẩm
+- So sánh hiệu quả giữa các nhóm
 - Cảnh báo rủi ro nếu có (ví dụ: chi phí cao nhưng tỷ lệ air thấp)
 
 **PHẦN 4 - ĐỀ XUẤT HÀNH ĐỘNG:**
@@ -44,8 +44,8 @@ Format output:
 📊 Tóm tắt KOC tháng X:
 • [số liệu]
 
-📦 Theo phân loại sản phẩm:
-• [phân loại]: X KOC (Y VNĐ)
+📦 Theo [group_label]:
+• [tên]: X KOC (Y VNĐ)
 
 💼 Nhận xét từ Brand Manager:
 • [nhận xét chuyên môn]
@@ -158,33 +158,34 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
     summary = summary_data.get("summary", {})
     missing_link = summary_data.get("missing_link_kocs", [])
     missing_gio = summary_data.get("missing_gio_kocs", [])
-    by_phan_loai = summary_data.get("by_phan_loai", {})
+    by_group = summary_data.get("by_group", {})
+    group_label = summary_data.get("group_label", "sản phẩm")
     
     # Format chi phí
     tong_chi_phi = summary.get("tong_chi_phi_deal", 0)
     chi_phi_formatted = f"{int(tong_chi_phi):,}".replace(",", ".") if tong_chi_phi else "0"
     
-    # Format theo phân loại sản phẩm
-    phan_loai_stats = []
-    for pl, stats in by_phan_loai.items():
-        chi_phi_pl = stats.get("chi_phi", 0)
-        chi_phi_pl_formatted = f"{int(chi_phi_pl):,}".replace(",", ".") if chi_phi_pl else "0"
+    # Format theo group
+    group_stats = []
+    for name, stats in by_group.items():
+        chi_phi_g = stats.get("chi_phi", 0)
+        chi_phi_g_formatted = f"{int(chi_phi_g):,}".replace(",", ".") if chi_phi_g else "0"
         
-        # Lấy danh sách KOC chưa air hoặc cần follow-up trong phân loại này
-        kocs_in_pl = stats.get("kocs", [])
-        kocs_chua_air = [k.get("id_koc") for k in kocs_in_pl if not k.get("da_air")][:3]
+        # Lấy danh sách KOC chưa air hoặc cần follow-up
+        kocs_in_g = stats.get("kocs", [])
+        kocs_chua_air = [k.get("id_koc") for k in kocs_in_g if not k.get("da_air")][:3]
         
-        phan_loai_stats.append({
-            "ten": pl,
+        group_stats.append({
+            "ten": name,
             "count": stats.get("count", 0),
             "da_air": stats.get("da_air", 0),
             "chua_air": stats.get("chua_air", 0),
-            "chi_phi": chi_phi_pl_formatted,
-            "kocs_chua_air": kocs_chua_air  # KOC cụ thể cần follow
+            "chi_phi": chi_phi_g_formatted,
+            "kocs_chua_air": kocs_chua_air
         })
     
     # Sort by count descending
-    phan_loai_stats.sort(key=lambda x: x["count"], reverse=True)
+    group_stats.sort(key=lambda x: x["count"], reverse=True)
     
     # Lấy danh sách KOC cụ thể cần follow-up
     kocs_can_link = [k.get("id_koc") or k.get("id_kenh") for k in missing_link[:5] if k.get("id_koc") or k.get("id_kenh")]
@@ -200,17 +201,16 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
     data_for_prompt = {
         "month": summary_data.get("month"),
         "week": summary_data.get("week"),
+        "group_label": group_label,  # "sản phẩm" hoặc "phân loại sản phẩm"
         "total": total,
         "da_air": da_air,
         "chua_air": summary.get("chua_air", 0),
         "da_air_chua_link": summary.get("da_air_chua_link", 0),
         "da_air_chua_gan_gio": summary.get("da_air_chua_gan_gio", 0),
         "tong_chi_phi_deal": chi_phi_formatted,
-        # Metrics cho Brand Manager
         "ty_le_air_percent": ty_le_air,
         "chi_phi_trung_binh_per_koc": chi_phi_tb_formatted,
-        "theo_phan_loai": phan_loai_stats,  # Tất cả phân loại
-        # Danh sách KOC CỤ THỂ cần action
+        "theo_group": group_stats,  # Data theo group_by
         "kocs_can_cap_nhat_link": kocs_can_link,
         "kocs_can_gan_gio": kocs_can_gio,
     }
@@ -225,14 +225,13 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1500  # Tăng để có đủ chỗ cho nhận xét
+            max_tokens=1500
         )
         
         return response.choices[0].message.content
         
     except Exception as e:
         print(f"❌ OpenAI Error: {e}")
-        # Fallback to simple format
         return format_koc_report_simple(summary_data)
 
 async def generate_content_calendar_text(calendar_data: Dict[str, Any]) -> str:
@@ -362,7 +361,8 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
     summary = summary_data.get("summary", {})
     month = summary_data.get("month")
     week = summary_data.get("week")
-    by_phan_loai = summary_data.get("by_phan_loai", {})
+    by_group = summary_data.get("by_group", {})
+    group_label = summary_data.get("group_label", "sản phẩm")
     missing_link = summary_data.get("missing_link_kocs", [])
     missing_gio = summary_data.get("missing_gio_kocs", [])
     
@@ -391,14 +391,14 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
 • Tổng chi phí deal: {chi_phi_formatted} VNĐ
 • Chi phí trung bình/KOC: {chi_phi_tb_fmt} VNĐ"""
     
-    # Thêm thống kê theo phân loại sản phẩm
-    if by_phan_loai:
-        text += "\n\n📦 Theo phân loại sản phẩm:"
-        sorted_pl = sorted(by_phan_loai.items(), key=lambda x: x[1].get("count", 0), reverse=True)
-        for pl, stats in sorted_pl:
-            chi_phi_pl = stats.get("chi_phi", 0)
-            chi_phi_pl_fmt = f"{int(chi_phi_pl):,}".replace(",", ".") if chi_phi_pl else "0"
-            text += f"\n• {pl}: {stats.get('count', 0)} KOC ({chi_phi_pl_fmt} VNĐ)"
+    # Thêm thống kê theo group
+    if by_group:
+        text += f"\n\n📦 Theo {group_label}:"
+        sorted_g = sorted(by_group.items(), key=lambda x: x[1].get("count", 0), reverse=True)
+        for name, stats in sorted_g:
+            chi_phi_g = stats.get("chi_phi", 0)
+            chi_phi_g_fmt = f"{int(chi_phi_g):,}".replace(",", ".") if chi_phi_g else "0"
+            text += f"\n• {name}: {stats.get('count', 0)} KOC ({chi_phi_g_fmt} VNĐ)"
     
     # Nhận xét Brand Manager (simple version)
     text += "\n\n💼 Nhận xét từ Brand Manager:"
@@ -469,3 +469,39 @@ def format_task_summary_simple(task_data: Dict[str, Any]) -> str:
         text += "\n\n⚠️ Cần xử lý các task quá hạn ngay!"
     
     return text
+
+
+# ============ GPT CHAT ============
+async def chat_with_gpt(question: str) -> str:
+    """
+    Gửi câu hỏi trực tiếp đến ChatGPT và nhận câu trả lời.
+    
+    Args:
+        question: Câu hỏi của user
+    
+    Returns:
+        Câu trả lời từ GPT
+    """
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": """Bạn là Jarvis - trợ lý AI thông minh của team marketing. 
+Bạn có thể trả lời mọi câu hỏi một cách thân thiện và hữu ích.
+Trả lời bằng tiếng Việt.
+Giữ câu trả lời ngắn gọn, súc tích (tối đa 500 từ).
+Sử dụng emoji phù hợp để làm nội dung sinh động hơn."""
+                },
+                {"role": "user", "content": question}
+            ],
+            temperature=0.8,
+            max_tokens=1000
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        print(f"❌ GPT Chat Error: {e}")
+        return f"❌ Xin lỗi, tôi không thể xử lý câu hỏi này lúc này. Lỗi: {str(e)}"

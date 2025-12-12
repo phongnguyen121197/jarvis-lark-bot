@@ -548,10 +548,15 @@ async def get_task_records(
     return results
 
 # ============ REPORT GENERATORS ============
-async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[str, Any]:
+async def generate_koc_summary(month: int, week: Optional[int] = None, group_by: str = "product") -> Dict[str, Any]:
     """
     Tạo báo cáo tổng hợp KOC theo tháng/tuần
-    Bao gồm: chi phí deal, số lượng theo sản phẩm
+    Bao gồm: chi phí deal, số lượng theo sản phẩm hoặc phân loại
+    
+    Args:
+        month: Tháng cần lấy
+        week: Tuần cần lấy (optional)
+        group_by: "product" (Nước hoa, Box quà) hoặc "brand" (Dark Beauty, Lady Killer)
     
     Returns:
         Dict chứa summary và danh sách chi tiết
@@ -568,11 +573,30 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
     tong_chi_phi_deal = 0
     tong_chi_phi_thanh_toan = 0
     
-    # Theo phân loại sản phẩm (thay vì sản phẩm)
-    by_phan_loai = {}  # {phan_loai: {count, chi_phi, da_air, chua_air, kocs: []}}
+    # Theo sản phẩm (Nước hoa, Box quà) - mặc định
+    by_product = {}
+    # Theo phân loại/brand (Dark Beauty, Lady Killer)
+    by_brand = {}
     
     missing_link_kocs = []
     missing_gio_kocs = []
+    
+    def safe_string(value):
+        """Convert value to string safely"""
+        if value is None:
+            return "Không xác định"
+        if isinstance(value, str):
+            return value if value else "Không xác định"
+        if isinstance(value, list):
+            if len(value) > 0:
+                first = value[0]
+                if isinstance(first, dict):
+                    return first.get("text") or first.get("value") or str(first)
+                return str(first)
+            return "Không xác định"
+        if isinstance(value, dict):
+            return value.get("text") or value.get("value") or str(value)
+        return str(value) if value else "Không xác định"
     
     for koc in records:
         # === Chi phí ===
@@ -592,37 +616,29 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
             except:
                 pass
         
-        # === Theo phân loại sản phẩm ===
-        phan_loai_raw = koc.get("phan_loai_san_pham") or koc.get("san_pham") or "Không xác định"
+        # === Lấy sản phẩm và phân loại ===
+        san_pham = safe_string(koc.get("san_pham"))  # Nước hoa, Box quà 30ml
+        phan_loai = safe_string(koc.get("phan_loai_san_pham"))  # Dark Beauty, Lady Killer
         
-        # Đảm bảo phan_loai là string (không phải list)
-        if isinstance(phan_loai_raw, list):
-            if len(phan_loai_raw) > 0:
-                first = phan_loai_raw[0]
-                if isinstance(first, dict):
-                    phan_loai = first.get("text") or first.get("value") or str(first)
-                else:
-                    phan_loai = str(first)
-            else:
-                phan_loai = "Không xác định"
-        elif isinstance(phan_loai_raw, dict):
-            phan_loai = phan_loai_raw.get("text") or phan_loai_raw.get("value") or str(phan_loai_raw)
-        else:
-            phan_loai = str(phan_loai_raw) if phan_loai_raw else "Không xác định"
+        # Nếu không có phân loại, fallback về sản phẩm
+        if phan_loai == "Không xác định" and san_pham != "Không xác định":
+            phan_loai = san_pham
         
-        if phan_loai not in by_phan_loai:
-            by_phan_loai[phan_loai] = {
-                "count": 0,
-                "chi_phi": 0,
-                "da_air": 0,
-                "chua_air": 0,
-                "kocs": []  # Lưu danh sách KOC để đề xuất cụ thể
-            }
-        by_phan_loai[phan_loai]["count"] += 1
+        # === Group theo sản phẩm ===
+        if san_pham not in by_product:
+            by_product[san_pham] = {"count": 0, "chi_phi": 0, "da_air": 0, "chua_air": 0, "kocs": []}
+        by_product[san_pham]["count"] += 1
+        
+        # === Group theo phân loại/brand ===
+        if phan_loai not in by_brand:
+            by_brand[phan_loai] = {"count": 0, "chi_phi": 0, "da_air": 0, "chua_air": 0, "kocs": []}
+        by_brand[phan_loai]["count"] += 1
         
         if da_deal:
             try:
-                by_phan_loai[phan_loai]["chi_phi"] += float(str(da_deal).replace(",", ""))
+                chi_phi_val = float(str(da_deal).replace(",", ""))
+                by_product[san_pham]["chi_phi"] += chi_phi_val
+                by_brand[phan_loai]["chi_phi"] += chi_phi_val
             except:
                 pass
         
@@ -642,11 +658,13 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
             "trang_thai_gio": koc.get("trang_thai_gan_gio"),
             "chi_phi": da_deal
         }
-        by_phan_loai[phan_loai]["kocs"].append(koc_info)
+        by_product[san_pham]["kocs"].append(koc_info)
+        by_brand[phan_loai]["kocs"].append(koc_info)
         
         if has_aired:
             da_air += 1
-            by_phan_loai[phan_loai]["da_air"] += 1
+            by_product[san_pham]["da_air"] += 1
+            by_brand[phan_loai]["da_air"] += 1
             
             if not link_air:
                 da_air_chua_link += 1
@@ -663,22 +681,30 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
                 missing_gio_kocs.append(koc)
         else:
             chua_air += 1
-            by_phan_loai[phan_loai]["chua_air"] += 1
+            by_product[san_pham]["chua_air"] += 1
+            by_brand[phan_loai]["chua_air"] += 1
+    
+    # Chọn data theo group_by
+    by_group = by_brand if group_by == "brand" else by_product
+    group_label = "phân loại sản phẩm" if group_by == "brand" else "sản phẩm"
     
     return {
         "month": month,
         "week": week,
+        "group_by": group_by,
+        "group_label": group_label,
         "summary": {
             "total": total,
             "da_air": da_air,
             "chua_air": chua_air,
             "da_air_chua_link": da_air_chua_link,
             "da_air_chua_gan_gio": da_air_chua_gan_gio,
-            # Chi phí mới
             "tong_chi_phi_deal": tong_chi_phi_deal,
             "tong_chi_phi_thanh_toan": tong_chi_phi_thanh_toan
         },
-        "by_phan_loai": by_phan_loai,  # Đổi từ by_san_pham
+        "by_group": by_group,  # Data theo group_by
+        "by_product": by_product,  # Luôn có để backup
+        "by_brand": by_brand,  # Luôn có để backup
         "missing_link_kocs": missing_link_kocs[:10],
         "missing_gio_kocs": missing_gio_kocs[:10],
         "all_records": records
