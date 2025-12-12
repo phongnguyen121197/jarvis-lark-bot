@@ -288,7 +288,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.3"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.4"}
 
 @app.get("/health")
 async def health():
@@ -335,6 +335,44 @@ async def test_koc_filter(month: int = 12):
             }
             for r in records[:5]
         ]
+    }
+
+@app.get("/debug/month-distribution")
+async def debug_month_distribution():
+    """Debug: Xem distribution của Tháng air trong tất cả records"""
+    from lark_base import get_all_records, BOOKING_BASE
+    
+    records = await get_all_records(
+        app_token=BOOKING_BASE["app_token"],
+        table_id=BOOKING_BASE["table_id"],
+        max_records=500
+    )
+    
+    # Collect all unique "Tháng air" values and their formats
+    month_values = {}
+    sample_by_month = {}
+    
+    for record in records:
+        fields = record.get("fields", {})
+        raw_value = fields.get("Tháng air")
+        
+        # Convert to string for grouping
+        key = str(raw_value)
+        
+        if key not in month_values:
+            month_values[key] = {
+                "count": 0,
+                "raw_type": type(raw_value).__name__,
+                "raw_sample": str(raw_value)[:200]
+            }
+            sample_by_month[key] = fields.get("ID KOC")
+        
+        month_values[key]["count"] += 1
+    
+    return {
+        "total_records": len(records),
+        "unique_month_values": len(month_values),
+        "distribution": month_values
     }
 
 # ============ RUN ============

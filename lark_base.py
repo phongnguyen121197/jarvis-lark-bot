@@ -236,18 +236,57 @@ async def get_booking_records(
     
     def extract_month(value) -> Optional[int]:
         """Extract tháng từ giá trị, trả về int 1-12"""
-        parsed = parse_lark_value(value)
-        if parsed is None:
+        if value is None:
             return None
         
-        parsed_str = str(parsed)
-        
-        # Tìm số trong string
-        match = re.search(r'(\d{1,2})', parsed_str)
-        if match:
-            month_val = int(match.group(1))
+        # Nếu là số trực tiếp
+        if isinstance(value, (int, float)):
+            month_val = int(value)
             if 1 <= month_val <= 12:
                 return month_val
+            return None
+        
+        # Nếu là string
+        if isinstance(value, str):
+            match = re.search(r'(\d{1,2})', value)
+            if match:
+                month_val = int(match.group(1))
+                if 1 <= month_val <= 12:
+                    return month_val
+            return None
+        
+        # Nếu là list (thường là [{'text': '09', 'type': 'text'}])
+        if isinstance(value, list):
+            if len(value) == 0:
+                return None
+            first = value[0]
+            if isinstance(first, dict):
+                text_val = first.get("text") or first.get("value")
+                if text_val:
+                    match = re.search(r'(\d{1,2})', str(text_val))
+                    if match:
+                        month_val = int(match.group(1))
+                        if 1 <= month_val <= 12:
+                            return month_val
+            elif isinstance(first, (int, float)):
+                month_val = int(first)
+                if 1 <= month_val <= 12:
+                    return month_val
+            elif isinstance(first, str):
+                match = re.search(r'(\d{1,2})', first)
+                if match:
+                    month_val = int(match.group(1))
+                    if 1 <= month_val <= 12:
+                        return month_val
+            return None
+        
+        # Nếu là dict
+        if isinstance(value, dict):
+            text_val = value.get("text") or value.get("value")
+            if text_val:
+                return extract_month(text_val)
+            return None
+        
         return None
     
     results = []
