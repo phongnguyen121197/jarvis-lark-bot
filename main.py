@@ -20,9 +20,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import modules
-from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_GENERAL_SUMMARY, INTENT_UNKNOWN
-from lark_base import generate_koc_summary, generate_content_calendar, test_connection
-from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_general_summary_text
+from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_UNKNOWN
+from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, test_connection
+from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text
 
 # ============ CONFIG ============
 LARK_APP_ID = os.getenv("LARK_APP_ID")
@@ -148,16 +148,29 @@ async def process_jarvis_query(text: str) -> str:
             start_date = intent_result.get("start_date")
             end_date = intent_result.get("end_date")
             team = intent_result.get("team_filter")
+            vi_tri = intent_result.get("vi_tri_filter")
             
             # Lấy dữ liệu
             calendar_data = await generate_content_calendar(
                 start_date=start_date,
                 end_date=end_date,
-                team=team
+                team=team,
+                vi_tri=vi_tri
             )
             
             # Sinh báo cáo
             report = await generate_content_calendar_text(calendar_data)
+            return report
+        
+        elif intent == INTENT_TASK_SUMMARY:
+            month = intent_result.get("month")
+            vi_tri = intent_result.get("vi_tri")
+            
+            # Lấy dữ liệu phân tích task
+            task_data = await generate_task_summary(month=month, vi_tri=vi_tri)
+            
+            # Sinh báo cáo
+            report = await generate_task_summary_text(task_data)
             return report
         
         elif intent == INTENT_GENERAL_SUMMARY:
@@ -187,7 +200,9 @@ async def process_jarvis_query(text: str) -> str:
                 "🤖 Xin chào! Tôi là Jarvis.\n\n"
                 "Bạn có thể hỏi tôi về:\n"
                 "• Báo cáo KOC: \"Tóm tắt KOC tháng 12\"\n"
+                "• Chi phí KOC: \"Chi phí KOC tháng 12 theo sản phẩm\"\n"
                 "• Lịch content: \"Lịch content tuần này\"\n"
+                "• Phân tích task: \"Task quá hạn theo vị trí\"\n"
                 "• Tổng hợp: \"Summary tuần này\"\n\n"
                 "Hãy thử hỏi tôi nhé! 😊"
             )
@@ -288,7 +303,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.5"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "3.6"}
 
 @app.get("/health")
 async def health():

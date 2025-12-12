@@ -9,19 +9,36 @@ from typing import Dict, Any, Optional
 # ============ INTENT TYPES ============
 INTENT_KOC_REPORT = "KOC_REPORT"
 INTENT_CONTENT_CALENDAR = "CONTENT_CALENDAR_SUMMARY"
+INTENT_TASK_SUMMARY = "TASK_SUMMARY"  # Phân tích task theo vị trí
 INTENT_GENERAL_SUMMARY = "GENERAL_SUMMARY"
 INTENT_UNKNOWN = "UNKNOWN"
 
 # ============ KEYWORDS ============
 KOC_KEYWORDS = [
     "koc", "booking", "air", "gắn giỏ", "gan gio", "pr", 
-    "đã air", "chưa air", "link air", "tháng deal", "tuần deal"
+    "đã air", "chưa air", "link air", "tháng deal", "tuần deal",
+    "chi phí", "chi phi", "sản phẩm", "san pham"
 ]
 
 CONTENT_KEYWORDS = [
-    "content", "lịch", "lich", "task", "công việc", "cong viec",
-    "bài đăng", "tiktok", "design", "digital", "deadline"
+    "content", "lịch", "lich", "công việc", "cong viec",
+    "bài đăng", "tiktok", "design", "digital"
 ]
+
+TASK_KEYWORDS = [
+    "task", "deadline", "quá hạn", "qua han", "overdue", "trễ hạn", "tre han",
+    "vị trí", "vi tri", "hr", "ecommerce", "content creator",
+    "sắp deadline", "sap deadline", "công việc", "phân tích task"
+]
+
+# Vị trí cụ thể
+VI_TRI_MAPPING = {
+    "hr": ["hr", "nhân sự", "nhan su"],
+    "content creator tiktok": ["content creator", "content tiktok", "creator tiktok"],
+    "ecommerce": ["ecommerce", "e-commerce", "tmdt", "thương mại điện tử"],
+    "design": ["design", "thiết kế", "thiet ke"],
+    "pr": ["pr", "pr booking"],
+}
 
 # ============ TIME PARSING ============
 def parse_month(text: str) -> Optional[int]:
@@ -92,6 +109,17 @@ def parse_team(text: str) -> Optional[str]:
     
     return None
 
+def parse_vi_tri(text: str) -> Optional[str]:
+    """Extract vị trí từ text"""
+    text = text.lower()
+    
+    for vi_tri, keywords in VI_TRI_MAPPING.items():
+        for kw in keywords:
+            if kw in text:
+                return vi_tri
+    
+    return None
+
 def get_current_week_range() -> tuple:
     """Lấy ngày đầu và cuối của tuần hiện tại"""
     today = datetime.now()
@@ -119,66 +147,93 @@ def classify_intent(text: str) -> Dict[str, Any]:
     # Count keywords
     koc_score = sum(1 for kw in KOC_KEYWORDS if kw in text_lower)
     content_score = sum(1 for kw in CONTENT_KEYWORDS if kw in text_lower)
+    task_score = sum(1 for kw in TASK_KEYWORDS if kw in text_lower)
     
     # Check for general summary
     is_general = any(kw in text_lower for kw in ["tổng hợp", "overview", "summary", "tóm tắt tuần"])
+    
+    # Check for task analysis specifically
+    is_task_analysis = any(kw in text_lower for kw in [
+        "quá hạn", "qua han", "overdue", "trễ hạn", "deadline",
+        "phân tích task", "vị trí", "vi tri"
+    ])
     
     # Parse time info
     month = parse_month(text)
     week = parse_week(text)
     team = parse_team(text)
+    vi_tri = parse_vi_tri(text)
     
-    # Default to current month if asking about KOC
-    if month is None:
-        month = datetime.now().month
-    
+    # Default to current month if not specified
+    current_month = datetime.now().month
     year = datetime.now().year
     
     # Determine intent
+    
+    # 1. Task Summary - khi hỏi về deadline, quá hạn, vị trí
+    if task_score > 0 and is_task_analysis:
+        return {
+            "intent": INTENT_TASK_SUMMARY,
+            "month": month,  # Có thể None
+            "vi_tri": vi_tri,
+            "year": year,
+            "original_text": text
+        }
+    
+    # 2. General Summary
     if is_general and (koc_score > 0 or content_score > 0):
-        # General summary combining both
         return {
             "intent": INTENT_GENERAL_SUMMARY,
             "components": ["koc", "content"] if koc_score > 0 and content_score > 0 
                          else (["koc"] if koc_score > 0 else ["content"]),
-            "month": month,
+            "month": month if month else current_month,
             "week": week,
             "year": year,
             "team": team,
             "original_text": text
         }
     
-    elif koc_score > content_score or koc_score > 0:
-        # KOC Report
+    # 3. KOC Report
+    if koc_score > content_score or koc_score > 0:
         return {
             "intent": INTENT_KOC_REPORT,
-            "month": month,
+            "month": month if month else current_month,
             "week": week,
             "year": year,
             "filters": extract_koc_filters(text_lower),
             "original_text": text
         }
     
-    elif content_score > 0:
-        # Content Calendar
+    # 4. Content Calendar
+    if content_score > 0:
         start_date, end_date = get_current_week_range()
+        
+        # Nếu có tháng cụ thể, điều chỉnh date range
+        if month:
+            start_date = f"{year}-{month:02d}-01"
+            # Cuối tháng
+            if month == 12:
+                end_date = f"{year}-12-31"
+            else:
+                end_date = f"{year}-{month+1:02d}-01"
         
         return {
             "intent": INTENT_CONTENT_CALENDAR,
-            "range_type": "week",
+            "range_type": "week" if not month else "month",
             "start_date": start_date,
             "end_date": end_date,
+            "month": month,
             "team_filter": team,
+            "vi_tri_filter": vi_tri,
             "original_text": text
         }
     
-    else:
-        # Unknown - có thể cần hỏi thêm
-        return {
-            "intent": INTENT_UNKNOWN,
-            "original_text": text,
-            "suggestion": "Bạn có thể hỏi về:\n• Báo cáo KOC (ví dụ: 'tóm tắt KOC tháng 12')\n• Lịch content (ví dụ: 'lịch content tuần này')"
-        }
+    # 5. Unknown
+    return {
+        "intent": INTENT_UNKNOWN,
+        "original_text": text,
+        "suggestion": "Bạn có thể hỏi về:\n• Báo cáo KOC (ví dụ: 'tóm tắt KOC tháng 12')\n• Lịch content (ví dụ: 'lịch content tuần này')\n• Phân tích task (ví dụ: 'task quá hạn theo vị trí')"
+    }
 
 def extract_koc_filters(text: str) -> list:
     """Extract các filter cụ thể cho KOC report"""

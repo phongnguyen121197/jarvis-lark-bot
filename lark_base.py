@@ -320,6 +320,9 @@ async def get_booking_records(
             "da_air": fields.get("Đã air"),
             "da_nhan": fields.get("Đã nhận"),
             "da_di_don": fields.get("Đã đi đơn"),
+            # Thêm chi phí
+            "da_deal": parse_lark_value(fields.get("Đã deal")),
+            "so_tien_tt": parse_lark_value(fields.get("Số tiền TT")),
         }
         
         # Filter theo tháng nếu có
@@ -342,6 +345,7 @@ async def get_booking_records(
 
 async def get_task_records(
     team: Optional[str] = None,
+    vi_tri: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -349,7 +353,8 @@ async def get_task_records(
     Lấy records từ bảng Task
     
     Args:
-        team: Tên team để filter
+        team: Tên team để filter (theo Người phụ trách)
+        vi_tri: Vị trí để filter (HR, Content Creator, Ecommerce...)
         start_date: Ngày bắt đầu (YYYY-MM-DD)
         end_date: Ngày kết thúc (YYYY-MM-DD)
     
@@ -359,45 +364,81 @@ async def get_task_records(
     records = await get_all_records(
         app_token=TASK_BASE["app_token"],
         table_id=TASK_BASE["table_id"],
-        max_records=500
+        max_records=2000
     )
+    
+    def parse_person_field(value):
+        """Parse field người phụ trách"""
+        if value is None:
+            return None
+        if isinstance(value, list) and len(value) > 0:
+            first = value[0]
+            if isinstance(first, dict):
+                return first.get("en_name") or first.get("name") or first.get("email")
+        if isinstance(value, str):
+            return value
+        return str(value) if value else None
     
     results = []
     for record in records:
         fields = record.get("fields", {})
         
+        # Parse deadline
+        deadline_raw = fields.get("Deadline")
+        deadline_ts = None
+        deadline_str = None
+        if deadline_raw:
+            try:
+                if isinstance(deadline_raw, (int, float)):
+                    deadline_ts = deadline_raw
+                    deadline_str = datetime.fromtimestamp(deadline_raw / 1000).strftime("%Y-%m-%d %H:%M")
+                else:
+                    deadline_str = str(deadline_raw)[:10]
+            except:
+                pass
+        
         task_data = {
             "record_id": record.get("record_id"),
             "du_an": extract_field_value(fields, "Dự án"),
-            "phu_trach": extract_field_value(fields, "Phụ trách"),
-            "nguoi_duyet": extract_field_value(fields, "Người duyệt"),
-            "ngay_tao": extract_field_value(fields, "Ngày tạo"),
-            "deadline": extract_field_value(fields, "Deadline"),
+            "cong_viec": extract_field_value(fields, "Công việc"),
+            "mo_ta": extract_field_value(fields, "Mô tả chi tiết"),
+            "nguoi_phu_trach": parse_person_field(fields.get("Người phụ trách")),
+            "nguoi_duyet": parse_person_field(fields.get("Người duyệt")),
+            "vi_tri": fields.get("Vị trí"),  # HR, Content Creator TikTok, Ecommerce...
+            "ngay_tao": fields.get("Ngày tạo"),
+            "deadline": deadline_str,
+            "deadline_ts": deadline_ts,
             "link_ket_qua": extract_field_value(fields, "Link Kết quả"),
-            "trang_thai": extract_field_value(fields, "Trạng thái"),
-            "duyet": extract_field_value(fields, "Duyệt"),
+            "duyet": fields.get("Duyệt"),
+            "overdue": fields.get("Overdue"),  # Có giá trị = đã quá hạn
             "ghi_chu": extract_field_value(fields, "Ghi chú"),
-            "raw_fields": fields
+            "thang": extract_field_value(fields, "Tháng"),
+            "nam": extract_field_value(fields, "Năm"),
         }
         
-        # Filter theo team
-        if team:
-            phu_trach = task_data.get("phu_trach")
-            if phu_trach:
-                phu_trach_str = str(phu_trach).lower()
-                if team.lower() not in phu_trach_str:
+        # Filter theo vị trí
+        if vi_tri:
+            task_vi_tri = task_data.get("vi_tri")
+            if task_vi_tri:
+                if vi_tri.lower() not in str(task_vi_tri).lower():
                     continue
+            else:
+                continue
+        
+        # Filter theo team (người phụ trách)
+        if team:
+            phu_trach = task_data.get("nguoi_phu_trach")
+            if phu_trach:
+                if team.lower() not in str(phu_trach).lower():
+                    continue
+            else:
+                continue
         
         # Filter theo ngày
         if start_date or end_date:
-            deadline = task_data.get("deadline")
-            if deadline:
+            if deadline_ts:
                 try:
-                    # Xử lý deadline dạng timestamp hoặc string
-                    if isinstance(deadline, (int, float)):
-                        deadline_dt = datetime.fromtimestamp(deadline / 1000)
-                    else:
-                        deadline_dt = datetime.strptime(str(deadline)[:10], "%Y-%m-%d")
+                    deadline_dt = datetime.fromtimestamp(deadline_ts / 1000)
                     
                     if start_date:
                         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -405,7 +446,7 @@ async def get_task_records(
                             continue
                     
                     if end_date:
-                        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
                         if deadline_dt > end_dt:
                             continue
                 except Exception as e:
@@ -419,6 +460,7 @@ async def get_task_records(
 async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[str, Any]:
     """
     Tạo báo cáo tổng hợp KOC theo tháng/tuần
+    Bao gồm: chi phí deal, số lượng theo sản phẩm
     
     Returns:
         Dict chứa summary và danh sách chi tiết
@@ -431,43 +473,78 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
     da_air_chua_link = 0
     da_air_chua_gan_gio = 0
     
+    # Chi phí
+    tong_chi_phi_deal = 0
+    tong_chi_phi_thanh_toan = 0
+    
+    # Theo sản phẩm
+    by_san_pham = {}  # {san_pham: {count, chi_phi, da_air}}
+    
     missing_link_kocs = []
     missing_gio_kocs = []
     
     for koc in records:
-        # Kiểm tra đã air chưa - dựa trên link air hoặc thời gian air
+        # === Chi phí ===
+        da_deal = koc.get("da_deal")
+        if da_deal:
+            try:
+                chi_phi = float(str(da_deal).replace(",", ""))
+                tong_chi_phi_deal += chi_phi
+            except:
+                pass
+        
+        so_tien_tt = koc.get("so_tien_tt")
+        if so_tien_tt:
+            try:
+                chi_phi_tt = float(str(so_tien_tt).replace(",", ""))
+                tong_chi_phi_thanh_toan += chi_phi_tt
+            except:
+                pass
+        
+        # === Theo sản phẩm ===
+        san_pham = koc.get("san_pham") or "Không xác định"
+        if san_pham not in by_san_pham:
+            by_san_pham[san_pham] = {
+                "count": 0,
+                "chi_phi": 0,
+                "da_air": 0,
+                "chua_air": 0
+            }
+        by_san_pham[san_pham]["count"] += 1
+        
+        if da_deal:
+            try:
+                by_san_pham[san_pham]["chi_phi"] += float(str(da_deal).replace(",", ""))
+            except:
+                pass
+        
+        # === Kiểm tra đã air ===
         link_air = koc.get("link_air_bai")
         thoi_gian_air = koc.get("thoi_gian_air_video")
         da_air_field = koc.get("da_air")
         
-        # Coi là đã air nếu có link HOẶC có thời gian air HOẶC field "Đã air" có giá trị
         has_aired = bool(link_air or thoi_gian_air or da_air_field)
         
         if has_aired:
             da_air += 1
+            by_san_pham[san_pham]["da_air"] += 1
             
-            # Đã air nhưng chưa có link
             if not link_air:
                 da_air_chua_link += 1
                 missing_link_kocs.append(koc)
             
-            # Đã air nhưng chưa gắn giỏ
             trang_thai_gio = koc.get("trang_thai_gan_gio")
             if trang_thai_gio:
                 trang_thai_str = str(trang_thai_gio).lower()
-                if "chưa" in trang_thai_str or "chua" in trang_thai_str:
-                    da_air_chua_gan_gio += 1
-                    missing_gio_kocs.append(koc)
-                elif "không" in trang_thai_str or "khong" in trang_thai_str:
-                    # Không gắn giỏ cũng tính
+                if "chưa" in trang_thai_str or "chua" in trang_thai_str or "không" in trang_thai_str or "khong" in trang_thai_str:
                     da_air_chua_gan_gio += 1
                     missing_gio_kocs.append(koc)
             else:
-                # Không có trạng thái = chưa gắn
                 da_air_chua_gan_gio += 1
                 missing_gio_kocs.append(koc)
         else:
             chua_air += 1
+            by_san_pham[san_pham]["chua_air"] += 1
     
     return {
         "month": month,
@@ -477,9 +554,13 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
             "da_air": da_air,
             "chua_air": chua_air,
             "da_air_chua_link": da_air_chua_link,
-            "da_air_chua_gan_gio": da_air_chua_gan_gio
+            "da_air_chua_gan_gio": da_air_chua_gan_gio,
+            # Chi phí mới
+            "tong_chi_phi_deal": tong_chi_phi_deal,
+            "tong_chi_phi_thanh_toan": tong_chi_phi_thanh_toan
         },
-        "missing_link_kocs": missing_link_kocs[:10],  # Top 10
+        "by_san_pham": by_san_pham,
+        "missing_link_kocs": missing_link_kocs[:10],
         "missing_gio_kocs": missing_gio_kocs[:10],
         "all_records": records
     }
@@ -487,7 +568,8 @@ async def generate_koc_summary(month: int, week: Optional[int] = None) -> Dict[s
 async def generate_content_calendar(
     start_date: str,
     end_date: str,
-    team: Optional[str] = None
+    team: Optional[str] = None,
+    vi_tri: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Tạo báo cáo lịch content theo tuần
@@ -496,55 +578,173 @@ async def generate_content_calendar(
         start_date: Ngày bắt đầu (YYYY-MM-DD)
         end_date: Ngày kết thúc (YYYY-MM-DD)
         team: Filter theo team (optional)
+        vi_tri: Filter theo vị trí (optional)
     
     Returns:
         Dict chứa calendar summary
     """
     records = await get_task_records(
         team=team,
+        vi_tri=vi_tri,
         start_date=start_date,
         end_date=end_date
     )
     
     # Group theo ngày
     by_date = {}
-    by_team = {}
+    by_vi_tri = {}
     overdue = []
     
     for task in records:
         deadline = task.get("deadline")
-        trang_thai = task.get("trang_thai")
-        phu_trach = str(task.get("phu_trach", "Unknown"))
+        vi_tri_task = task.get("vi_tri") or "Không xác định"
+        overdue_field = task.get("overdue")
         
         # Group by date
         if deadline:
-            date_key = str(deadline)[:10] if isinstance(deadline, str) else "No date"
+            date_key = str(deadline)[:10]
             if date_key not in by_date:
                 by_date[date_key] = []
             by_date[date_key].append(task)
         
-        # Group by team/person
-        if phu_trach not in by_team:
-            by_team[phu_trach] = []
-        by_team[phu_trach].append(task)
+        # Group by vị trí
+        if vi_tri_task not in by_vi_tri:
+            by_vi_tri[vi_tri_task] = []
+        by_vi_tri[vi_tri_task].append(task)
         
-        # Check overdue
-        if trang_thai and "overdue" in str(trang_thai).lower():
+        # Check overdue (field Overdue có giá trị = đã quá hạn)
+        if overdue_field:
             overdue.append(task)
     
     return {
         "date_range": f"{start_date} → {end_date}",
         "team_filter": team,
+        "vi_tri_filter": vi_tri,
         "summary": {
             "total_tasks": len(records),
             "total_overdue": len(overdue),
             "days_with_content": len(by_date),
-            "teams_involved": len(by_team)
+            "vi_tri_count": len(by_vi_tri)
         },
         "by_date": by_date,
-        "by_team": by_team,
+        "by_vi_tri": by_vi_tri,
         "overdue_tasks": overdue,
         "all_records": records
+    }
+
+
+async def generate_task_summary(
+    month: Optional[int] = None,
+    vi_tri: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Tạo báo cáo phân tích task theo vị trí
+    Bao gồm: task quá hạn, sắp đến deadline theo từng vị trí
+    
+    Args:
+        month: Tháng cần phân tích (1-12)
+        vi_tri: Vị trí cụ thể để filter (optional)
+    
+    Returns:
+        Dict chứa task summary theo vị trí
+    """
+    # Lấy tất cả tasks
+    all_tasks = await get_task_records(vi_tri=vi_tri)
+    
+    now = datetime.now()
+    today = now.date()
+    
+    # Filter theo tháng nếu có
+    if month:
+        filtered_tasks = []
+        for task in all_tasks:
+            task_thang = task.get("thang")
+            if task_thang:
+                try:
+                    task_month = int(re.search(r'(\d{1,2})', str(task_thang)).group(1))
+                    if task_month == month:
+                        filtered_tasks.append(task)
+                except:
+                    pass
+        tasks = filtered_tasks
+    else:
+        tasks = all_tasks
+    
+    # Phân tích theo vị trí
+    by_vi_tri = {}
+    total_overdue = 0
+    total_sap_deadline = 0  # Trong 3 ngày tới
+    total_chua_duyet = 0
+    
+    overdue_tasks = []
+    sap_deadline_tasks = []
+    
+    for task in tasks:
+        vi_tri_task = task.get("vi_tri") or "Không xác định"
+        overdue_field = task.get("overdue")
+        deadline_ts = task.get("deadline_ts")
+        duyet = task.get("duyet")
+        
+        # Khởi tạo vị trí nếu chưa có
+        if vi_tri_task not in by_vi_tri:
+            by_vi_tri[vi_tri_task] = {
+                "total": 0,
+                "overdue": 0,
+                "sap_deadline": 0,  # Trong 3 ngày
+                "da_duyet": 0,
+                "chua_duyet": 0,
+                "tasks_overdue": [],
+                "tasks_sap_deadline": []
+            }
+        
+        by_vi_tri[vi_tri_task]["total"] += 1
+        
+        # Kiểm tra overdue
+        if overdue_field:
+            by_vi_tri[vi_tri_task]["overdue"] += 1
+            by_vi_tri[vi_tri_task]["tasks_overdue"].append(task)
+            overdue_tasks.append(task)
+            total_overdue += 1
+        
+        # Kiểm tra sắp đến deadline (trong 3 ngày tới)
+        if deadline_ts and not overdue_field:
+            try:
+                deadline_dt = datetime.fromtimestamp(deadline_ts / 1000).date()
+                days_until = (deadline_dt - today).days
+                
+                if 0 <= days_until <= 3:
+                    by_vi_tri[vi_tri_task]["sap_deadline"] += 1
+                    by_vi_tri[vi_tri_task]["tasks_sap_deadline"].append(task)
+                    sap_deadline_tasks.append(task)
+                    total_sap_deadline += 1
+            except:
+                pass
+        
+        # Kiểm tra duyệt
+        if duyet:
+            by_vi_tri[vi_tri_task]["da_duyet"] += 1
+        else:
+            by_vi_tri[vi_tri_task]["chua_duyet"] += 1
+            total_chua_duyet += 1
+    
+    # Giới hạn số task trả về để không quá dài
+    for vi_tri_key in by_vi_tri:
+        by_vi_tri[vi_tri_key]["tasks_overdue"] = by_vi_tri[vi_tri_key]["tasks_overdue"][:5]
+        by_vi_tri[vi_tri_key]["tasks_sap_deadline"] = by_vi_tri[vi_tri_key]["tasks_sap_deadline"][:5]
+    
+    return {
+        "month": month,
+        "vi_tri_filter": vi_tri,
+        "summary": {
+            "total_tasks": len(tasks),
+            "total_overdue": total_overdue,
+            "total_sap_deadline": total_sap_deadline,
+            "total_chua_duyet": total_chua_duyet,
+            "so_vi_tri": len(by_vi_tri)
+        },
+        "by_vi_tri": by_vi_tri,
+        "overdue_tasks": overdue_tasks[:20],
+        "sap_deadline_tasks": sap_deadline_tasks[:20]
     }
 
 # ============ TEST ============
