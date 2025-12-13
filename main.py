@@ -20,9 +20,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import modules
-from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_GPT_CHAT, INTENT_UNKNOWN
-from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, test_connection
-from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, chat_with_gpt
+from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_GPT_CHAT, INTENT_DASHBOARD, INTENT_UNKNOWN
+from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, generate_dashboard_summary, test_connection
+from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, chat_with_gpt
 
 # ============ CONFIG ============
 LARK_APP_ID = os.getenv("LARK_APP_ID")
@@ -203,6 +203,23 @@ async def process_jarvis_query(text: str) -> str:
             report = await generate_general_summary_text(koc_data, content_data)
             return report
         
+        elif intent == INTENT_DASHBOARD:
+            month = intent_result.get("month")
+            week = intent_result.get("week")
+            report_type = intent_result.get("report_type", "full")
+            nhan_su = intent_result.get("nhan_su")  # Tên nhân sự cụ thể (nếu có)
+            
+            # Lấy dữ liệu Dashboard
+            dashboard_data = await generate_dashboard_summary(month=month, week=week)
+            
+            # Sinh báo cáo
+            report = await generate_dashboard_report_text(
+                dashboard_data, 
+                report_type=report_type,
+                nhan_su_filter=nhan_su
+            )
+            return report
+        
         elif intent == INTENT_GPT_CHAT:
             # Gọi ChatGPT trực tiếp
             question = intent_result.get("question", "")
@@ -218,10 +235,11 @@ async def process_jarvis_query(text: str) -> str:
                 "🤖 Xin chào! Tôi là Jarvis.\n\n"
                 "Bạn có thể hỏi tôi về:\n"
                 "• Báo cáo KOC: \"Tóm tắt KOC tháng 12\"\n"
-                "• Chi phí KOC: \"Chi phí KOC tháng 12 theo sản phẩm\"\n"
-                "• Lịch content: \"Lịch content tuần này\"\n"
-                "• Phân tích task: \"Task quá hạn theo vị trí\"\n"
-                "• Tổng hợp: \"Summary tuần này\"\n"
+                "• Tình hình booking: \"Cập nhật tình hình booking tháng 12\"\n"
+                "• KPI cá nhân: \"KPI của Mai tháng 12\" hoặc \"KPI Trà Mi\"\n"
+                "• Cảnh báo KPI: \"Cảnh báo KPI tháng 12\"\n"
+                "• Top KOC: \"Top KOC doanh số tháng 12\"\n"
+                "• Task: \"Task quá hạn theo vị trí\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
                 "Hãy thử hỏi tôi nhé! 😊"
             )
@@ -331,7 +349,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.3"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.5.1"}
 
 @app.get("/health")
 async def health():
@@ -568,6 +586,18 @@ async def debug_table_fields(table_id: str):
         }
     except Exception as e:
         return {"error": str(e), "table_id": table_id}
+
+
+@app.get("/debug/dashboard/{month}")
+async def debug_dashboard(month: int):
+    """Debug: Test Dashboard data cho một tháng cụ thể"""
+    from lark_base import generate_dashboard_summary
+    
+    try:
+        data = await generate_dashboard_summary(month=month)
+        return data
+    except Exception as e:
+        return {"error": str(e), "month": month}
 
 
 # ============ RUN ============

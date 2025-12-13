@@ -12,6 +12,7 @@ INTENT_CONTENT_CALENDAR = "CONTENT_CALENDAR_SUMMARY"
 INTENT_TASK_SUMMARY = "TASK_SUMMARY"  # Phân tích task theo vị trí
 INTENT_GENERAL_SUMMARY = "GENERAL_SUMMARY"
 INTENT_GPT_CHAT = "GPT_CHAT"  # Hỏi ChatGPT trực tiếp
+INTENT_DASHBOARD = "DASHBOARD"  # Dashboard tổng hợp
 INTENT_UNKNOWN = "UNKNOWN"
 
 # ============ KEYWORDS ============
@@ -49,6 +50,47 @@ PRODUCT_FILTER_KEYWORDS = {
     "box_qua": ["box quà", "set quà", "box qua", "set qua", "quà tặng", "qua tang", "gift box", "giftbox"],
     "nuoc_hoa": ["nước hoa", "nuoc hoa", "perfume"],
     "sua_tam": ["sữa tắm", "sua tam", "body wash"],
+}
+
+# Keywords cho Dashboard
+DASHBOARD_KEYWORDS = [
+    "dashboard", "kpi", "top koc", "doanh số", "doanh so",
+    "liên hệ", "lien he", "tỷ lệ deal", "ty le deal",
+    "nhân sự", "nhan su", "hiệu suất", "hieu suat",
+    "gmv", "performance",
+    # Trigger mới
+    "cập nhật tình hình", "cap nhat tinh hinh",
+    "tình hình booking", "tinh hinh booking",
+    "cập nhật booking", "cap nhat booking"
+]
+
+# Danh sách nhân sự booking (để detect tên cụ thể)
+NHAN_SU_MAPPING = {
+    # Tên thường gọi -> Tên đầy đủ trong Lark
+    "trà mi": "Trà Mi - Intern Booking",
+    "tra mi": "Trà Mi - Intern Booking",
+    "mi": "Trà Mi - Intern Booking",
+    "mai": "Như Mai",
+    "như mai": "Như Mai",
+    "nhu mai": "Như Mai",
+    "thảo": "Phương Thảo - Intern Booking",
+    "thao": "Phương Thảo - Intern Booking",
+    "phương thảo": "Phương Thảo - Intern Booking",
+    "dương": "Lê Thuỳ Dương",
+    "duong": "Lê Thuỳ Dương",
+    "thuỳ dương": "Lê Thuỳ Dương",
+    "thuy duong": "Lê Thuỳ Dương",
+    "vịt": "Lê Thuỳ Dương",
+    "vit": "Lê Thuỳ Dương",
+    "linh": "Ngọc Linh - Booking Re...",
+    "ngọc linh": "Ngọc Linh - Booking Re...",
+    "ngoc linh": "Ngọc Linh - Booking Re...",
+    "quân": "Quân",
+    "quan": "Quân",
+    "châu": "Bảo Châu - Booking Remote",
+    "chau": "Bảo Châu - Booking Remote",
+    "bảo châu": "Bảo Châu - Booking Remote",
+    "bao chau": "Bảo Châu - Booking Remote",
 }
 
 # Vị trí cụ thể
@@ -253,6 +295,55 @@ def classify_intent(text: str) -> Dict[str, Any]:
     year = datetime.now().year
     
     # ========== DETERMINE INTENT ==========
+    
+    # 0. Dashboard - khi hỏi về KPI, top KOC, doanh số, liên hệ nhân sự
+    dashboard_score = sum(1 for kw in DASHBOARD_KEYWORDS if kw in text_lower)
+    is_dashboard = dashboard_score >= 1 or any(kw in text_lower for kw in [
+        "top koc", "kpi nhân sự", "kpi nhan su", "doanh số koc", "doanh so koc",
+        "tỷ lệ liên hệ", "ty le lien he", "dashboard", "hiệu suất nhân sự",
+        # Trigger mới
+        "cập nhật tình hình", "cap nhat tinh hinh",
+        "tình hình booking", "tinh hinh booking"
+    ])
+    
+    # Detect nhân sự cụ thể
+    nhan_su_detected = None
+    for short_name, full_name in NHAN_SU_MAPPING.items():
+        # Kiểm tra pattern "kpi của X", "kpi X", "X kpi"
+        if short_name in text_lower:
+            # Đảm bảo là từ riêng biệt (không phải substring)
+            import re
+            pattern = r'\b' + re.escape(short_name) + r'\b'
+            if re.search(pattern, text_lower):
+                nhan_su_detected = full_name
+                is_dashboard = True  # Kích hoạt dashboard
+                break
+    
+    if is_dashboard:
+        # Xác định loại báo cáo dashboard
+        report_type = "full"  # Mặc định: báo cáo đầy đủ
+        
+        # Nếu có nhân sự cụ thể -> báo cáo cá nhân
+        if nhan_su_detected:
+            report_type = "kpi_ca_nhan"
+        elif "top koc" in text_lower or "doanh số" in text_lower or "doanh so" in text_lower or "gmv" in text_lower:
+            report_type = "top_koc"
+        elif "liên hệ" in text_lower or "lien he" in text_lower or "tỷ lệ deal" in text_lower:
+            report_type = "lien_he"
+        elif "kpi" in text_lower and ("nhân sự" in text_lower or "nhan su" in text_lower):
+            report_type = "kpi_nhan_su"
+        elif "cảnh báo" in text_lower or "canh bao" in text_lower or "warning" in text_lower or "alert" in text_lower:
+            report_type = "canh_bao"
+        
+        return {
+            "intent": INTENT_DASHBOARD,
+            "month": month if month else current_month,
+            "week": week,
+            "year": year,
+            "report_type": report_type,  # "full", "top_koc", "lien_he", "kpi_nhan_su", "kpi_ca_nhan", "canh_bao"
+            "nhan_su": nhan_su_detected,  # Tên nhân sự cụ thể (nếu có)
+            "original_text": text
+        }
     
     # 1. KOC Report - ưu tiên cao nhất khi có từ khóa KOC
     if koc_score > 0 and koc_score >= content_score:

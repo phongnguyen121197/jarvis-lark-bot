@@ -31,6 +31,27 @@ DASHBOARD_KOC_BASE = {
     "table_id": "blko05Rb76NGi5nd"  # Table mới từ URL
 }
 
+# === DASHBOARD TABLES ===
+DASHBOARD_THANG_TABLE = {
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
+    "table_id": "tblhf6x9hciClWGz"  # KALLE - DASHBOARD THÁNG
+}
+
+DOANH_THU_KOC_TABLE = {
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
+    "table_id": "tbl2TQywnQTYxpNj"  # KALLE - PR - Data doanh thu Koc (tuần)
+}
+
+LIEN_HE_TUAN_TABLE = {
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
+    "table_id": "tbl18EP44c0MAnKR"  # KALLE - PR - Data liên hệ (tuần)
+}
+
+KALODATA_TABLE = {
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
+    "table_id": "tblX6CB3BshhwloA"  # KALLE- PR - Data Kalodata
+}
+
 # ============ AUTH ============
 _token_cache = {
     "token": None,
@@ -1020,3 +1041,289 @@ async def debug_task_fields():
             result["sample_records"].append(sample)
     
     return result
+
+
+# ============ DASHBOARD FUNCTIONS ============
+
+def safe_extract_text(value):
+    """Extract text value from Lark field (handles list, dict, string)"""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, list) and len(value) > 0:
+        first = value[0]
+        if isinstance(first, dict):
+            return first.get("text") or first.get("name") or first.get("value")
+        return str(first)
+    if isinstance(value, dict):
+        return value.get("text") or value.get("name") or value.get("value")
+    return str(value)
+
+
+def safe_extract_person_name(value):
+    """Extract person name from Lark person field"""
+    if value is None:
+        return "Không xác định"
+    if isinstance(value, list) and len(value) > 0:
+        first = value[0]
+        if isinstance(first, dict):
+            return first.get("name") or first.get("en_name") or "Không xác định"
+    if isinstance(value, dict):
+        return value.get("name") or value.get("en_name") or "Không xác định"
+    return str(value)
+
+
+async def get_dashboard_thang_records(month: Optional[int] = None, week: Optional[str] = None) -> List[Dict]:
+    """Lấy records từ bảng Dashboard Tháng"""
+    records = await get_all_records(
+        app_token=DASHBOARD_THANG_TABLE["app_token"],
+        table_id=DASHBOARD_THANG_TABLE["table_id"],
+        max_records=500
+    )
+    
+    result = []
+    for record in records:
+        fields = record.get("fields", {})
+        
+        # Filter by month if specified
+        thang_raw = safe_extract_text(fields.get("Tháng báo cáo"))
+        try:
+            thang = int(thang_raw) if thang_raw else None
+        except:
+            thang = None
+        
+        if month and thang != month:
+            continue
+        
+        # Filter by week if specified
+        tuan = fields.get("Tuần báo cáo")
+        if week and tuan != week:
+            continue
+        
+        result.append({
+            "nhan_su": safe_extract_person_name(fields.get("Nhân sự book")),
+            "san_pham": fields.get("Sản phẩm"),
+            "thang": thang,
+            "tuan": tuan,
+            "kpi_so_luong": fields.get("KPI Số lượng"),
+            "kpi_ngan_sach": fields.get("KPI ngân sách"),
+            "so_luong_deal": fields.get("Số lượng - Deal", 0),
+            "so_luong_air": fields.get("Số lượng - Air", 0),
+            "so_luong_tong_air": fields.get("Số lượng tổng - Air", 0),
+            "ngan_sach_deal": fields.get("Ngân sách - Deal", 0),
+            "ngan_sach_air": fields.get("Ngân sách - Air", 0),
+            "ngan_sach_tong_air": fields.get("Ngân sách tổng - Air", 0),
+            "pct_kpi_so_luong": fields.get("% KPI Số lượng tổng", 0),
+            "pct_kpi_ngan_sach": fields.get("% KPI Ngân sách tổng - Air", 0),
+        })
+    
+    return result
+
+
+async def get_doanh_thu_koc_records(month: Optional[int] = None, week: Optional[str] = None) -> List[Dict]:
+    """Lấy records từ bảng Doanh thu KOC (tuần)"""
+    records = await get_all_records(
+        app_token=DOANH_THU_KOC_TABLE["app_token"],
+        table_id=DOANH_THU_KOC_TABLE["table_id"],
+        max_records=1000
+    )
+    
+    result = []
+    for record in records:
+        fields = record.get("fields", {})
+        
+        # Filter by month
+        thang_raw = safe_extract_text(fields.get("Tháng báo cáo"))
+        try:
+            thang = int(thang_raw) if thang_raw else None
+        except:
+            thang = None
+        
+        if month and thang != month:
+            continue
+        
+        # Filter by week
+        tuan = fields.get("Tuần báo cáo")
+        if week and tuan != week:
+            continue
+        
+        # Parse GMV
+        gmv_raw = fields.get("GMV", "0")
+        try:
+            gmv = float(str(gmv_raw).replace(",", ""))
+        except:
+            gmv = 0
+        
+        result.append({
+            "id_kenh": fields.get("ID kênh"),
+            "gmv": gmv,
+            "link_video": fields.get("Link video", {}).get("link") if isinstance(fields.get("Link video"), dict) else None,
+            "thang": thang,
+            "tuan": tuan,
+            "ngay_dang": fields.get("Ngày đăng"),
+        })
+    
+    return result
+
+
+async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] = None) -> List[Dict]:
+    """Lấy records từ bảng Data liên hệ (tuần)"""
+    records = await get_all_records(
+        app_token=LIEN_HE_TUAN_TABLE["app_token"],
+        table_id=LIEN_HE_TUAN_TABLE["table_id"],
+        max_records=500
+    )
+    
+    result = []
+    for record in records:
+        fields = record.get("fields", {})
+        
+        # Filter by month
+        thang_raw = safe_extract_text(fields.get("Tháng báo cáo"))
+        try:
+            thang = int(thang_raw) if thang_raw else None
+        except:
+            thang = None
+        
+        if month and thang != month:
+            continue
+        
+        # Filter by week
+        tuan = fields.get("Tuần báo cáo")
+        if week and tuan != week:
+            continue
+        
+        result.append({
+            "nhan_su": safe_extract_person_name(fields.get("Người tạo")),
+            "thang": thang,
+            "tuan": tuan,
+            "thoi_gian_tuan": fields.get("Thời gian tuần"),
+            "tong_lien_he": fields.get("Tổng liên hệ", 0),
+            "da_deal": fields.get("Đã deal", "0"),
+            "dang_trao_doi": fields.get("Đang trao đổi", "0"),
+            "tu_choi": fields.get("Từ chối", "0"),
+            "khong_phan_hoi": fields.get("Không phản hồi từ đầu", "0"),
+            "ty_le_deal": fields.get("Tỷ lệ đã deal", 0),
+            "ty_le_trao_doi": fields.get("Tỷ lệ đang trao đổi", 0),
+            "ty_le_tu_choi": fields.get("Tỷ lệ từ chối", 0),
+        })
+    
+    return result
+
+
+async def generate_dashboard_summary(month: Optional[int] = None, week: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Tạo báo cáo Dashboard tổng hợp
+    Bao gồm: KPI nhân sự, Top KOC, Tỷ lệ liên hệ
+    """
+    # 1. Lấy data Dashboard Tháng (KPI)
+    dashboard_records = await get_dashboard_thang_records(month=month, week=week)
+    
+    # 2. Lấy data Doanh thu KOC
+    doanh_thu_records = await get_doanh_thu_koc_records(month=month, week=week)
+    
+    # 3. Lấy data Liên hệ
+    lien_he_records = await get_lien_he_records(month=month, week=week)
+    
+    # === Tổng hợp KPI theo nhân sự ===
+    kpi_by_nhan_su = {}
+    for r in dashboard_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su not in kpi_by_nhan_su:
+            kpi_by_nhan_su[nhan_su] = {
+                "kpi_so_luong": 0,
+                "kpi_ngan_sach": 0,
+                "so_luong_air": 0,
+                "ngan_sach_air": 0,
+                "pct_kpi_so_luong": 0,
+                "pct_kpi_ngan_sach": 0,
+                "count": 0
+            }
+        
+        try:
+            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += int(r.get("kpi_so_luong") or 0)
+            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += int(r.get("kpi_ngan_sach") or 0)
+        except:
+            pass
+        
+        kpi_by_nhan_su[nhan_su]["so_luong_air"] += r.get("so_luong_tong_air") or 0
+        kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += r.get("ngan_sach_tong_air") or 0
+        kpi_by_nhan_su[nhan_su]["count"] += 1
+    
+    # Tính % KPI cho mỗi nhân sự
+    for ns, data in kpi_by_nhan_su.items():
+        if data["kpi_so_luong"] > 0:
+            data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
+        if data["kpi_ngan_sach"] > 0:
+            data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
+    
+    # === Top KOC doanh số ===
+    koc_gmv = {}
+    for r in doanh_thu_records:
+        id_kenh = r["id_kenh"]
+        if id_kenh:
+            if id_kenh not in koc_gmv:
+                koc_gmv[id_kenh] = 0
+            koc_gmv[id_kenh] += r["gmv"]
+    
+    # Sort by GMV
+    top_koc = sorted(koc_gmv.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    # === Tổng hợp liên hệ theo nhân sự ===
+    lien_he_by_nhan_su = {}
+    for r in lien_he_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su not in lien_he_by_nhan_su:
+            lien_he_by_nhan_su[nhan_su] = {
+                "tong_lien_he": 0,
+                "da_deal": 0,
+                "dang_trao_doi": 0,
+                "tu_choi": 0,
+            }
+        
+        lien_he_by_nhan_su[nhan_su]["tong_lien_he"] += r.get("tong_lien_he") or 0
+        try:
+            lien_he_by_nhan_su[nhan_su]["da_deal"] += int(r.get("da_deal") or 0)
+            lien_he_by_nhan_su[nhan_su]["dang_trao_doi"] += int(r.get("dang_trao_doi") or 0)
+            lien_he_by_nhan_su[nhan_su]["tu_choi"] += int(r.get("tu_choi") or 0)
+        except:
+            pass
+    
+    # Tính tỷ lệ
+    for ns, data in lien_he_by_nhan_su.items():
+        total = data["tong_lien_he"]
+        if total > 0:
+            data["ty_le_deal"] = round(data["da_deal"] / total * 100, 1)
+            data["ty_le_trao_doi"] = round(data["dang_trao_doi"] / total * 100, 1)
+            data["ty_le_tu_choi"] = round(data["tu_choi"] / total * 100, 1)
+        else:
+            data["ty_le_deal"] = 0
+            data["ty_le_trao_doi"] = 0
+            data["ty_le_tu_choi"] = 0
+    
+    # === Tổng quan ===
+    total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
+    total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
+    total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
+    total_ngan_sach_air = sum(d["ngan_sach_air"] for d in kpi_by_nhan_su.values())
+    total_gmv = sum(koc_gmv.values())
+    
+    return {
+        "month": month,
+        "week": week,
+        "tong_quan": {
+            "kpi_so_luong": total_kpi_so_luong,
+            "so_luong_air": total_so_luong_air,
+            "pct_kpi_so_luong": round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0,
+            "kpi_ngan_sach": total_kpi_ngan_sach,
+            "ngan_sach_air": total_ngan_sach_air,
+            "pct_kpi_ngan_sach": round(total_ngan_sach_air / total_kpi_ngan_sach * 100, 1) if total_kpi_ngan_sach > 0 else 0,
+            "total_gmv": total_gmv,
+        },
+        "kpi_nhan_su": kpi_by_nhan_su,
+        "top_koc": top_koc,
+        "lien_he_nhan_su": lien_he_by_nhan_su,
+    }

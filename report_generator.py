@@ -505,3 +505,287 @@ Sử dụng emoji phù hợp để làm nội dung sinh động hơn."""
     except Exception as e:
         print(f"❌ GPT Chat Error: {e}")
         return f"❌ Xin lỗi, tôi không thể xử lý câu hỏi này lúc này. Lỗi: {str(e)}"
+
+
+# ============ DASHBOARD REPORT ============
+
+def format_currency(value):
+    """Format số tiền thành dạng đọc được (VD: 77.4M, 5.5M, 850K)"""
+    if value >= 1_000_000_000:
+        return f"{value/1_000_000_000:.1f}B"
+    elif value >= 1_000_000:
+        return f"{value/1_000_000:.1f}M"
+    elif value >= 1_000:
+        return f"{value/1_000:.0f}K"
+    else:
+        return f"{value:,.0f}"
+
+
+async def generate_dashboard_report_text(data: dict, report_type: str = "full", nhan_su_filter: str = None) -> str:
+    """
+    Sinh báo cáo Dashboard dạng text
+    report_type: "full", "top_koc", "lien_he", "kpi_nhan_su", "kpi_ca_nhan", "canh_bao"
+    nhan_su_filter: Tên nhân sự cụ thể (cho report_type = "kpi_ca_nhan")
+    """
+    from datetime import datetime
+    
+    month = data.get("month")
+    week = data.get("week")
+    tong_quan = data.get("tong_quan", {})
+    kpi_nhan_su = data.get("kpi_nhan_su", {})
+    top_koc = data.get("top_koc", [])
+    lien_he_nhan_su = data.get("lien_he_nhan_su", {})
+    
+    # Lấy ngày hiện tại để kiểm tra cảnh báo
+    current_day = datetime.now().day
+    current_month = datetime.now().month
+    is_after_15 = current_day > 15
+    is_current_month = (month == current_month)
+    
+    # Header
+    time_label = f"Tháng {month}" if month else "Tổng hợp"
+    if week:
+        time_label += f" - {week}"
+    
+    lines = []
+    
+    # ===== KPI CÁ NHÂN =====
+    if report_type == "kpi_ca_nhan" and nhan_su_filter:
+        lines.append(f"👤 **KPI CÁ NHÂN - {time_label.upper()}**\n")
+        
+        # Tìm nhân sự trong data (fuzzy match)
+        matched_ns = None
+        matched_kpi = None
+        matched_lh = None
+        
+        for ns, kpi in kpi_nhan_su.items():
+            if nhan_su_filter.lower() in ns.lower() or ns.lower() in nhan_su_filter.lower():
+                matched_ns = ns
+                matched_kpi = kpi
+                break
+        
+        for ns, lh in lien_he_nhan_su.items():
+            if nhan_su_filter.lower() in ns.lower() or ns.lower() in nhan_su_filter.lower():
+                matched_lh = lh
+                break
+        
+        if not matched_ns:
+            lines.append(f"❌ Không tìm thấy nhân sự: {nhan_su_filter}")
+            lines.append("\n📋 Danh sách nhân sự có sẵn:")
+            for ns in kpi_nhan_su.keys():
+                if ns != "Không xác định":
+                    lines.append(f"  • {ns}")
+            return "\n".join(lines)
+        
+        lines.append(f"═══════════════════════════")
+        lines.append(f"📊 **{matched_ns}**")
+        lines.append(f"═══════════════════════════\n")
+        
+        if matched_kpi:
+            pct_sl = matched_kpi.get("pct_kpi_so_luong", 0)
+            pct_ns = matched_kpi.get("pct_kpi_ngan_sach", 0)
+            sl_air = matched_kpi.get("so_luong_air", 0)
+            kpi_sl = matched_kpi.get("kpi_so_luong", 0)
+            ns_air = matched_kpi.get("ngan_sach_air", 0)
+            kpi_ns = matched_kpi.get("kpi_ngan_sach", 0)
+            
+            # Performance emoji
+            if pct_sl >= 50:
+                status = "🟢 Đang trên tiến độ"
+            elif pct_sl >= 20:
+                status = "🟡 Cần cố gắng thêm"
+            else:
+                status = "🔴 Dưới tiến độ"
+            
+            lines.append(f"**Trạng thái:** {status}\n")
+            lines.append(f"📦 **KPI Số lượng:**")
+            lines.append(f"   • Đã air: {sl_air}/{kpi_sl} video")
+            lines.append(f"   • Tiến độ: {pct_sl}%")
+            lines.append(f"   • Còn thiếu: {max(0, kpi_sl - sl_air)} video\n")
+            
+            lines.append(f"💰 **KPI Ngân sách:**")
+            lines.append(f"   • Đã air: {format_currency(ns_air)}/{format_currency(kpi_ns)}")
+            lines.append(f"   • Tiến độ: {pct_ns}%\n")
+            
+            # Cảnh báo nếu qua ngày 15 mà KPI < 50%
+            if is_after_15 and is_current_month and pct_sl < 50:
+                lines.append(f"⚠️ **CẢNH BÁO:** Đã qua ngày 15, KPI mới đạt {pct_sl}%!")
+                remaining_days = 30 - current_day
+                videos_needed = kpi_sl - sl_air
+                if remaining_days > 0:
+                    daily_target = round(videos_needed / remaining_days, 1)
+                    lines.append(f"📌 Cần air thêm ~{daily_target} video/ngày để đạt KPI\n")
+        
+        if matched_lh:
+            tong = matched_lh.get("tong_lien_he", 0)
+            ty_le_deal = matched_lh.get("ty_le_deal", 0)
+            ty_le_trao_doi = matched_lh.get("ty_le_trao_doi", 0)
+            ty_le_tu_choi = matched_lh.get("ty_le_tu_choi", 0)
+            da_deal = matched_lh.get("da_deal", 0)
+            
+            lines.append(f"📞 **Liên hệ KOC:**")
+            lines.append(f"   • Tổng liên hệ: {tong}")
+            lines.append(f"   • ✅ Đã deal: {da_deal} ({ty_le_deal}%)")
+            lines.append(f"   • 💬 Đang trao đổi: {ty_le_trao_doi}%")
+            lines.append(f"   • ❌ Từ chối: {ty_le_tu_choi}%")
+        
+        return "\n".join(lines)
+    
+    # ===== BÁO CÁO CẢNH BÁO =====
+    if report_type == "canh_bao":
+        lines.append(f"⚠️ **CẢNH BÁO KPI - {time_label.upper()}**\n")
+        
+        if not is_after_15:
+            lines.append(f"📅 Hôm nay là ngày {current_day}, chưa đến mốc kiểm tra (ngày 15).")
+            lines.append("Hệ thống sẽ cảnh báo khi qua ngày 15 mà KPI < 50%.")
+            return "\n".join(lines)
+        
+        lines.append(f"📅 Hôm nay là ngày {current_day}, đã qua mốc kiểm tra ngày 15.\n")
+        
+        # Tìm nhân sự có KPI < 50%
+        warning_list = []
+        ok_list = []
+        
+        for nhan_su, kpi in kpi_nhan_su.items():
+            if nhan_su == "Không xác định":
+                continue
+            pct_sl = kpi.get("pct_kpi_so_luong", 0)
+            sl_air = kpi.get("so_luong_air", 0)
+            kpi_sl = kpi.get("kpi_so_luong", 0)
+            
+            if pct_sl < 50:
+                warning_list.append((nhan_su, pct_sl, sl_air, kpi_sl))
+            else:
+                ok_list.append((nhan_su, pct_sl))
+        
+        if warning_list:
+            lines.append("🔴 **NHÂN SỰ CẦN CHÚ Ý:**")
+            lines.append("═══════════════════════════")
+            for ns, pct, done, target in sorted(warning_list, key=lambda x: x[1]):
+                remaining = target - done
+                lines.append(f"⚠️ **{ns}**: {pct}% ({done}/{target})")
+                lines.append(f"   → Cần thêm {remaining} video")
+            lines.append("")
+        else:
+            lines.append("✅ Tất cả nhân sự đều đạt >= 50% KPI!")
+        
+        if ok_list:
+            lines.append("\n🟢 **NHÂN SỰ ĐẠT TIẾN ĐỘ:**")
+            for ns, pct in sorted(ok_list, key=lambda x: x[1], reverse=True):
+                lines.append(f"✅ {ns}: {pct}%")
+        
+        return "\n".join(lines)
+    
+    # ===== BÁO CÁO THÔNG THƯỜNG =====
+    lines.append(f"📊 **DASHBOARD {time_label.upper()}**\n")
+    
+    # ===== TỔNG QUAN =====
+    if report_type in ["full", "kpi_nhan_su"]:
+        lines.append("═══════════════════════════")
+        lines.append("📈 **TỔNG QUAN KPI**")
+        lines.append("═══════════════════════════")
+        
+        # KPI Số lượng
+        kpi_sl = tong_quan.get("kpi_so_luong", 0)
+        sl_air = tong_quan.get("so_luong_air", 0)
+        pct_sl = tong_quan.get("pct_kpi_so_luong", 0)
+        lines.append(f"📦 Số lượng Air: {sl_air}/{kpi_sl} ({pct_sl}%)")
+        
+        # KPI Ngân sách
+        kpi_ns = tong_quan.get("kpi_ngan_sach", 0)
+        ns_air = tong_quan.get("ngan_sach_air", 0)
+        pct_ns = tong_quan.get("pct_kpi_ngan_sach", 0)
+        lines.append(f"💰 Ngân sách Air: {format_currency(ns_air)}/{format_currency(kpi_ns)} ({pct_ns}%)")
+        
+        # Total GMV
+        total_gmv = tong_quan.get("total_gmv", 0)
+        if total_gmv > 0:
+            lines.append(f"🏆 Tổng GMV KOC: {format_currency(total_gmv)}")
+        
+        # Cảnh báo tổng quan nếu qua ngày 15 mà KPI < 50%
+        if is_after_15 and is_current_month and pct_sl < 50:
+            lines.append(f"\n⚠️ **CẢNH BÁO:** Đã qua ngày 15, KPI tổng mới đạt {pct_sl}%!")
+        
+        lines.append("")
+    
+    # ===== KPI NHÂN SỰ =====
+    if report_type in ["full", "kpi_nhan_su"] and kpi_nhan_su:
+        lines.append("═══════════════════════════")
+        lines.append("👥 **KPI THEO NHÂN SỰ**")
+        lines.append("═══════════════════════════")
+        
+        # Sắp xếp theo % KPI số lượng giảm dần
+        sorted_ns = sorted(kpi_nhan_su.items(), key=lambda x: x[1].get("pct_kpi_so_luong", 0), reverse=True)
+        
+        warning_count = 0
+        for nhan_su, kpi in sorted_ns:
+            if nhan_su == "Không xác định":
+                continue
+            pct_sl = kpi.get("pct_kpi_so_luong", 0)
+            pct_ns = kpi.get("pct_kpi_ngan_sach", 0)
+            sl_air = kpi.get("so_luong_air", 0)
+            kpi_sl = kpi.get("kpi_so_luong", 0)
+            
+            # Emoji dựa trên performance
+            if pct_sl >= 50:
+                emoji = "🟢"
+            elif pct_sl >= 20:
+                emoji = "🟡"
+            else:
+                emoji = "🔴"
+                if is_after_15 and is_current_month:
+                    warning_count += 1
+            
+            lines.append(f"{emoji} **{nhan_su}**: {sl_air}/{kpi_sl} ({pct_sl}% SL | {pct_ns}% NS)")
+        
+        if warning_count > 0 and is_after_15 and is_current_month:
+            lines.append(f"\n⚠️ Có {warning_count} nhân sự KPI < 20% sau ngày 15!")
+        
+        lines.append("")
+    
+    # ===== TOP KOC DOANH SỐ =====
+    if report_type in ["full", "top_koc"] and top_koc:
+        lines.append("═══════════════════════════")
+        lines.append("🏅 **TOP 10 KOC DOANH SỐ**")
+        lines.append("═══════════════════════════")
+        
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (koc_id, gmv) in enumerate(top_koc[:10]):
+            if i < 3:
+                prefix = medals[i]
+            else:
+                prefix = f"{i+1}."
+            lines.append(f"{prefix} @{koc_id}: {format_currency(gmv)}")
+        
+        lines.append("")
+    
+    # ===== LIÊN HỆ NHÂN SỰ =====
+    if report_type in ["full", "lien_he"] and lien_he_nhan_su:
+        lines.append("═══════════════════════════")
+        lines.append("📞 **TỶ LỆ LIÊN HỆ NHÂN SỰ**")
+        lines.append("═══════════════════════════")
+        
+        # Sắp xếp theo tổng liên hệ giảm dần
+        sorted_lh = sorted(lien_he_nhan_su.items(), key=lambda x: x[1].get("tong_lien_he", 0), reverse=True)
+        
+        for nhan_su, lh in sorted_lh:
+            if nhan_su == "Không xác định":
+                continue
+            tong = lh.get("tong_lien_he", 0)
+            if tong == 0:
+                continue
+            
+            ty_le_deal = lh.get("ty_le_deal", 0)
+            ty_le_trao_doi = lh.get("ty_le_trao_doi", 0)
+            ty_le_tu_choi = lh.get("ty_le_tu_choi", 0)
+            
+            lines.append(f"👤 **{nhan_su}** ({tong} liên hệ)")
+            lines.append(f"   ✅ Deal: {ty_le_deal}% | 💬 Trao đổi: {ty_le_trao_doi}% | ❌ Từ chối: {ty_le_tu_choi}%")
+        
+        lines.append("")
+    
+    # Footer
+    lines.append("───────────────────────────")
+    lines.append("💡 Tip: Hỏi \"KPI của Mai\" hoặc \"Cảnh báo KPI\" để xem chi tiết")
+    
+    return "\n".join(lines)
