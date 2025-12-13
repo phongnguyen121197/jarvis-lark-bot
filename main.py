@@ -523,6 +523,53 @@ async def debug_list_tables():
     }
 
 
+@app.get("/debug/table-fields/{table_id}")
+async def debug_table_fields(table_id: str):
+    """Debug: Xem fields và sample data của một table cụ thể"""
+    from lark_base import get_all_records, BOOKING_BASE
+    
+    try:
+        records = await get_all_records(
+            app_token=BOOKING_BASE["app_token"],
+            table_id=table_id,
+            max_records=5
+        )
+        
+        if not records:
+            return {"error": "No records found", "table_id": table_id}
+        
+        # Collect all field names
+        all_fields = set()
+        for record in records:
+            fields = record.get("fields", {})
+            all_fields.update(fields.keys())
+        
+        # Get sample records
+        sample_records = []
+        for record in records[:3]:
+            fields = record.get("fields", {})
+            # Truncate long values
+            truncated = {}
+            for k, v in fields.items():
+                if isinstance(v, str) and len(v) > 100:
+                    truncated[k] = v[:100] + "..."
+                elif isinstance(v, list) and len(v) > 3:
+                    truncated[k] = v[:3]
+                else:
+                    truncated[k] = v
+            sample_records.append(truncated)
+        
+        return {
+            "table_id": table_id,
+            "total_records_fetched": len(records),
+            "total_fields": len(all_fields),
+            "all_field_names": sorted(list(all_fields)),
+            "sample_records": sample_records
+        }
+    except Exception as e:
+        return {"error": str(e), "table_id": table_id}
+
+
 # ============ RUN ============
 if __name__ == "__main__":
     import uvicorn
