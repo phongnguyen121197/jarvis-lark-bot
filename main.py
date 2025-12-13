@@ -489,6 +489,40 @@ async def debug_dashboard_koc_fields():
     }
 
 
+@app.get("/debug/list-tables")
+async def debug_list_tables():
+    """Debug: Liệt kê TẤT CẢ tables trong Booking Base"""
+    from lark_base import get_tenant_access_token, LARK_API_BASE, BOOKING_BASE
+    import httpx
+    
+    token = await get_tenant_access_token()
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{LARK_API_BASE}/bitable/v1/apps/{BOOKING_BASE['app_token']}/tables",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        data = response.json()
+    
+    if data.get("code") != 0:
+        return {"error": data.get("msg"), "raw": data}
+    
+    tables = data.get("data", {}).get("items", [])
+    
+    return {
+        "app_token": BOOKING_BASE["app_token"],
+        "total_tables": len(tables),
+        "tables": [
+            {
+                "table_id": t.get("table_id"),
+                "name": t.get("name"),
+                "revision": t.get("revision")
+            }
+            for t in tables
+        ]
+    }
+
+
 # ============ RUN ============
 if __name__ == "__main__":
     import uvicorn
