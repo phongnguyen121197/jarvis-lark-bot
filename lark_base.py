@@ -25,6 +25,12 @@ TASK_BASE = {
     "table_id": "tblq7TUkSHSulafy"
 }
 
+# Bảng Dashboard KOC - cùng Base với Booking nhưng khác table
+DASHBOARD_KOC_BASE = {
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",  # Giống Booking
+    "table_id": "blko05Rb76NGi5nd"  # Table mới từ URL
+}
+
 # ============ AUTH ============
 _token_cache = {
     "token": None,

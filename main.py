@@ -331,7 +331,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.2"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.3"}
 
 @app.get("/health")
 async def health():
@@ -451,6 +451,41 @@ async def debug_all_field_names():
         "all_field_names": sorted(list(all_fields)),
         "product_related_fields": product_fields,
         "sample_record": sample_record
+    }
+
+
+@app.get("/debug/dashboard-koc-fields")
+async def debug_dashboard_koc_fields():
+    """Debug: Xem TẤT CẢ field names từ Dashboard KOC table"""
+    from lark_base import get_all_records, DASHBOARD_KOC_BASE
+    
+    records = await get_all_records(
+        app_token=DASHBOARD_KOC_BASE["app_token"],
+        table_id=DASHBOARD_KOC_BASE["table_id"],
+        max_records=10
+    )
+    
+    if not records:
+        return {"error": "No records found", "table_id": DASHBOARD_KOC_BASE["table_id"]}
+    
+    # Collect all field names
+    all_fields = set()
+    for record in records:
+        fields = record.get("fields", {})
+        all_fields.update(fields.keys())
+    
+    # Get sample records with values
+    sample_records = []
+    for record in records[:3]:
+        fields = record.get("fields", {})
+        sample_records.append(fields)
+    
+    return {
+        "table_id": DASHBOARD_KOC_BASE["table_id"],
+        "total_records": len(records),
+        "total_fields": len(all_fields),
+        "all_field_names": sorted(list(all_fields)),
+        "sample_records": sample_records
     }
 
 
