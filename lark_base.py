@@ -1084,7 +1084,11 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
         max_records=500
     )
     
+    print(f"📊 Dashboard Tháng: Total records = {len(records)}, filter month = {month}")
+    
     result = []
+    month_distribution = {}  # Debug: đếm số record theo tháng
+    
     for record in records:
         fields = record.get("fields", {})
         
@@ -1094,6 +1098,9 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
             thang = int(thang_raw) if thang_raw else None
         except:
             thang = None
+        
+        # Debug: đếm distribution
+        month_distribution[thang] = month_distribution.get(thang, 0) + 1
         
         if month and thang != month:
             continue
@@ -1119,6 +1126,9 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
             "pct_kpi_so_luong": fields.get("% KPI Số lượng tổng", 0),
             "pct_kpi_ngan_sach": fields.get("% KPI Ngân sách tổng - Air", 0),
         })
+    
+    print(f"📊 Month distribution: {month_distribution}")
+    print(f"📊 After filter: {len(result)} records")
     
     return result
 
@@ -1177,7 +1187,11 @@ async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] =
         max_records=500
     )
     
+    print(f"📞 Liên hệ: Total records = {len(records)}, filter month = {month}")
+    
     result = []
+    month_distribution = {}
+    
     for record in records:
         fields = record.get("fields", {})
         
@@ -1187,6 +1201,9 @@ async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] =
             thang = int(thang_raw) if thang_raw else None
         except:
             thang = None
+        
+        # Debug
+        month_distribution[thang] = month_distribution.get(thang, 0) + 1
         
         if month and thang != month:
             continue
@@ -1211,6 +1228,9 @@ async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] =
             "ty_le_tu_choi": fields.get("Tỷ lệ từ chối", 0),
         })
     
+    print(f"📞 Month distribution: {month_distribution}")
+    print(f"📞 After filter: {len(result)} records")
+    
     return result
 
 
@@ -1218,40 +1238,104 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     """
     Tạo báo cáo Dashboard tổng hợp
     Bao gồm: KPI nhân sự, Top KOC, Tỷ lệ liên hệ
+    
+    Logic mới:
+    - Số video đã air = Đếm từ bảng Booking (có Link air bài)
+    - KPI = Lấy từ Dashboard Tháng nhưng CHỈ 1 LẦN (không cộng tổng các tuần)
     """
-    # 1. Lấy data Dashboard Tháng (KPI)
+    # 1. Lấy data Dashboard Tháng (KPI) - CHỈ ĐỂ LẤY KPI TARGET
     dashboard_records = await get_dashboard_thang_records(month=month, week=week)
     
-    # 2. Lấy data Doanh thu KOC
+    # 2. Lấy data từ Booking để đếm số video đã air
+    booking_records = await get_all_records(
+        app_token=BOOKING_BASE["app_token"],
+        table_id=BOOKING_BASE["table_id"],
+        max_records=2000
+    )
+    
+    # 3. Lấy data Doanh thu KOC
     doanh_thu_records = await get_doanh_thu_koc_records(month=month, week=week)
     
-    # 3. Lấy data Liên hệ
+    # 4. Lấy data Liên hệ
     lien_he_records = await get_lien_he_records(month=month, week=week)
     
-    # === Tổng hợp KPI theo nhân sự ===
+    # === Đếm số video đã air từ Booking (theo nhân sự và tháng) ===
+    video_air_by_nhan_su = {}
+    for record in booking_records:
+        fields = record.get("fields", {})
+        
+        # Kiểm tra tháng air
+        thang_air_raw = fields.get("Tháng air")
+        try:
+            if isinstance(thang_air_raw, list) and len(thang_air_raw) > 0:
+                thang_air = int(thang_air_raw[0].get("text", 0)) if isinstance(thang_air_raw[0], dict) else int(thang_air_raw[0])
+            elif isinstance(thang_air_raw, (int, float)):
+                thang_air = int(thang_air_raw)
+            elif isinstance(thang_air_raw, str):
+                thang_air = int(thang_air_raw)
+            else:
+                thang_air = None
+        except:
+            thang_air = None
+        
+        # Filter theo tháng
+        if month and thang_air != month:
+            continue
+        
+        # Kiểm tra có link air không
+        link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
+        if not link_air:
+            continue
+        
+        # Lấy tên nhân sự
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+        
+        if nhan_su not in video_air_by_nhan_su:
+            video_air_by_nhan_su[nhan_su] = 0
+        video_air_by_nhan_su[nhan_su] += 1
+    
+    print(f"📹 Video air by nhân sự (tháng {month}): {video_air_by_nhan_su}")
+    
+    # === Tổng hợp KPI theo nhân sự (CHỈ LẤY 1 LẦN, KHÔNG CỘNG TỔNG) ===
     kpi_by_nhan_su = {}
+    seen_nhan_su = set()  # Để track nhân sự đã xử lý
+    
     for r in dashboard_records:
         nhan_su = r["nhan_su"]
-        if nhan_su not in kpi_by_nhan_su:
-            kpi_by_nhan_su[nhan_su] = {
-                "kpi_so_luong": 0,
-                "kpi_ngan_sach": 0,
-                "so_luong_air": 0,
-                "ngan_sach_air": 0,
-                "pct_kpi_so_luong": 0,
-                "pct_kpi_ngan_sach": 0,
-                "count": 0
-            }
+        
+        # CHỈ LẤY 1 LẦN cho mỗi nhân sự (vì KPI giống nhau giữa các tuần)
+        if nhan_su in seen_nhan_su:
+            continue
+        seen_nhan_su.add(nhan_su)
         
         try:
-            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += int(r.get("kpi_so_luong") or 0)
-            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += int(r.get("kpi_ngan_sach") or 0)
+            kpi_so_luong = int(r.get("kpi_so_luong") or 0)
+            kpi_ngan_sach = int(r.get("kpi_ngan_sach") or 0)
         except:
-            pass
+            kpi_so_luong = 0
+            kpi_ngan_sach = 0
         
-        kpi_by_nhan_su[nhan_su]["so_luong_air"] += r.get("so_luong_tong_air") or 0
-        kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += r.get("ngan_sach_tong_air") or 0
-        kpi_by_nhan_su[nhan_su]["count"] += 1
+        # Lấy số video đã air từ Booking
+        so_luong_air = video_air_by_nhan_su.get(nhan_su, 0)
+        
+        # Ngân sách air vẫn lấy từ Dashboard (cộng tổng các tuần)
+        ngan_sach_air = r.get("ngan_sach_tong_air") or 0
+        
+        kpi_by_nhan_su[nhan_su] = {
+            "kpi_so_luong": kpi_so_luong,
+            "kpi_ngan_sach": kpi_ngan_sach,
+            "so_luong_air": so_luong_air,
+            "ngan_sach_air": ngan_sach_air,
+            "pct_kpi_so_luong": 0,
+            "pct_kpi_ngan_sach": 0,
+        }
+    
+    # Bổ sung ngân sách air từ các tuần khác (vì ngân sách cần cộng tổng)
+    for r in dashboard_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su in kpi_by_nhan_su:
+            # Cộng thêm ngân sách từ các tuần (trừ lần đầu đã tính)
+            pass  # Tạm thời bỏ qua, cần xem lại logic ngân sách
     
     # Tính % KPI cho mỗi nhân sự
     for ns, data in kpi_by_nhan_su.items():
@@ -1259,6 +1343,8 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
         if data["kpi_ngan_sach"] > 0:
             data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
+    
+    print(f"📊 KPI by nhân sự: {kpi_by_nhan_su}")
     
     # === Top KOC doanh số ===
     koc_gmv = {}

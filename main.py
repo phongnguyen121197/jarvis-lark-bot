@@ -349,7 +349,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.5.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.6"}
 
 @app.get("/health")
 async def health():
@@ -598,6 +598,40 @@ async def debug_dashboard(month: int):
         return data
     except Exception as e:
         return {"error": str(e), "month": month}
+
+
+@app.get("/debug/dashboard-raw/{month}")
+async def debug_dashboard_raw(month: int):
+    """Debug: Xem raw data từ từng bảng Dashboard cho tháng cụ thể"""
+    from lark_base import (
+        get_dashboard_thang_records, 
+        get_lien_he_records, 
+        get_doanh_thu_koc_records
+    )
+    
+    try:
+        dashboard_records = await get_dashboard_thang_records(month=month)
+        lien_he_records = await get_lien_he_records(month=month)
+        doanh_thu_records = await get_doanh_thu_koc_records(month=month)
+        
+        return {
+            "month": month,
+            "dashboard_thang": {
+                "count": len(dashboard_records),
+                "sample": dashboard_records[:5] if dashboard_records else []
+            },
+            "lien_he": {
+                "count": len(lien_he_records),
+                "sample": lien_he_records[:5] if lien_he_records else []
+            },
+            "doanh_thu_koc": {
+                "count": len(doanh_thu_records),
+                "sample": doanh_thu_records[:5] if doanh_thu_records else []
+            }
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc(), "month": month}
 
 
 # ============ RUN ============
