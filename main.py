@@ -7,6 +7,9 @@ import json
 import base64
 import hashlib
 import time
+import re
+from datetime import datetime
+from typing import Optional, Dict
 from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import CBC
@@ -35,12 +38,12 @@ TENANT_ACCESS_TOKEN_URL = f"{LARK_API_BASE}/auth/v3/tenant_access_token/internal
 SEND_MESSAGE_URL = f"{LARK_API_BASE}/im/v1/messages"
 
 # ============ DANH SÁCH NHÓM ĐÃ ĐĂNG KÝ ============
-# Sẽ được cập nhật sau khi lấy chat_id từ logs
 GROUP_CHATS = {
-    # "ten_nhom": "chat_id"
-    # Ví dụ:
-    # "mkt_team": "oc_xxxxxxx",
-    # "booking_remote": "oc_xxxxxxx",
+    "booking_sep": "oc_7356c37c72891ea5314507d78ab2e937",        # Kalle - Booking k sếp
+    "digital": "oc_f2a9dc7332c3f08e6090c19166a4b47d",            # Cheng & Kalle | Digital
+    "leader_marketing": "oc_d178ad558d36919731fb0bdf26a79eb7",   # Kalle - Leader Marketing
+    "mkt_sale_kho": "oc_b503e285cdfb700b72b72fca3f1f316c",       # Cheng & Kalle | MKT x Sale x Kho
+    "mkt_team": "oc_768c8b7b8680299e36fe889de677578a",           # Kalle - MKT Team
 }
 
 # Danh sách nhóm đã nhận tin nhắn (auto-collect từ events)
@@ -150,12 +153,277 @@ async def send_lark_message(chat_id: str, text: str):
         )
         return response.json()
 
+
+# ============ SEND REPORT TO GROUP ============
+# Mapping tên nhóm trong câu lệnh
+GROUP_NAME_MAPPING = {
+    # Booking sếp
+    "booking": "booking_sep",
+    "booking sếp": "booking_sep",
+    "booking sep": "booking_sep",
+    "booking k sếp": "booking_sep",
+    "booking k sep": "booking_sep",
+    
+    # Digital
+    "digital": "digital",
+    "cheng digital": "digital",
+    
+    # Leader Marketing
+    "leader": "leader_marketing",
+    "leader marketing": "leader_marketing",
+    "leader mkt": "leader_marketing",
+    
+    # MKT x Sale x Kho
+    "sale": "mkt_sale_kho",
+    "kho": "mkt_sale_kho",
+    "mkt sale": "mkt_sale_kho",
+    "mkt x sale": "mkt_sale_kho",
+    "sale x kho": "mkt_sale_kho",
+    
+    # MKT Team
+    "mkt team": "mkt_team",
+    "marketing team": "mkt_team",
+    
+    # All groups
+    "tất cả": "all",
+    "tat ca": "all",
+    "all": "all",
+}
+
+# Tên đầy đủ của nhóm (để hiển thị)
+GROUP_DISPLAY_NAMES = {
+    "booking_sep": "Kalle - Booking k sếp",
+    "digital": "Cheng & Kalle | Digital",
+    "leader_marketing": "Kalle - Leader Marketing",
+    "mkt_sale_kho": "Cheng & Kalle | MKT x Sale x Kho",
+    "mkt_team": "Kalle - MKT Team",
+}
+
+
+def check_custom_message_command(text: str) -> Optional[Dict]:
+    """
+    Kiểm tra xem có phải lệnh gửi tin nhắn tùy chỉnh không
+    Ví dụ: "Thông báo sản phẩm Dark Beauty đã về hàng vào nhóm MKT Team và Booking"
+    """
+    text_lower = text.lower()
+    
+    # Kiểm tra có phải lệnh thông báo/gửi tin không
+    notify_keywords = ["thông báo", "thong bao", "gửi tin", "gui tin", "nhắn tin", "nhan tin", "notify", "gởi tin"]
+    is_notify = any(kw in text_lower for kw in notify_keywords)
+    
+    if not is_notify:
+        return None
+    
+    # Kiểm tra có nhắc đến nhóm không
+    group_indicators = ["nhóm", "nhom", "group", "vào", "vao", "cho", "đến", "den", "tới", "toi"]
+    has_group = any(kw in text_lower for kw in group_indicators)
+    
+    if not has_group:
+        return None
+    
+    # Tìm tất cả các nhóm được nhắc đến
+    target_groups = []
+    for group_name, group_key in GROUP_NAME_MAPPING.items():
+        if group_name in text_lower:
+            if group_key not in target_groups:
+                target_groups.append(group_key)
+    
+    if not target_groups:
+        return None
+    
+    # Trích xuất nội dung tin nhắn
+    # Tìm vị trí bắt đầu của phần chỉ định nhóm
+    group_start_patterns = [
+        r'vào\s+nhóm', r'vao\s+nhom',
+        r'cho\s+nhóm', r'cho\s+nhom',
+        r'đến\s+nhóm', r'den\s+nhom',
+        r'tới\s+nhóm', r'toi\s+nhom',
+        r'vào\s+group', r'cho\s+group',
+    ]
+    
+    message_content = text
+    for pattern in group_start_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            message_content = text[:match.start()].strip()
+            break
+    
+    # Loại bỏ các keyword thông báo ở đầu
+    for kw in notify_keywords:
+        if message_content.lower().startswith(kw):
+            message_content = message_content[len(kw):].strip()
+            break
+    
+    # Loại bỏ "là" hoặc ":" ở đầu nếu có
+    message_content = re.sub(r'^(là|:)\s*', '', message_content, flags=re.IGNORECASE).strip()
+    
+    if not message_content:
+        return None
+    
+    return {
+        "type": "custom_message",
+        "message": message_content,
+        "target_groups": target_groups
+    }
+
+
+async def handle_custom_message_to_groups(params: Dict) -> str:
+    """Xử lý gửi tin nhắn tùy chỉnh đến nhiều nhóm"""
+    message = params.get("message", "")
+    target_groups = params.get("target_groups", [])
+    
+    if not message:
+        return "❌ Không tìm thấy nội dung tin nhắn"
+    
+    if not target_groups:
+        return "❌ Không tìm thấy nhóm đích"
+    
+    # Format tin nhắn với emoji
+    formatted_message = f"📢 **THÔNG BÁO**\n\n{message}"
+    
+    results = []
+    success_count = 0
+    
+    for group_key in target_groups:
+        if group_key == "all":
+            # Gửi đến tất cả nhóm
+            for gk, chat_id in GROUP_CHATS.items():
+                try:
+                    await send_lark_message(chat_id, formatted_message)
+                    results.append(f"✅ {GROUP_DISPLAY_NAMES.get(gk, gk)}")
+                    success_count += 1
+                except Exception as e:
+                    results.append(f"❌ {GROUP_DISPLAY_NAMES.get(gk, gk)}: {str(e)}")
+            break
+        else:
+            chat_id = GROUP_CHATS.get(group_key)
+            if chat_id:
+                try:
+                    await send_lark_message(chat_id, formatted_message)
+                    results.append(f"✅ {GROUP_DISPLAY_NAMES.get(group_key, group_key)}")
+                    success_count += 1
+                except Exception as e:
+                    results.append(f"❌ {GROUP_DISPLAY_NAMES.get(group_key, group_key)}: {str(e)}")
+            else:
+                results.append(f"❌ Không tìm thấy nhóm: {group_key}")
+    
+    return f"📤 Đã gửi thông báo đến {success_count}/{len(results)} nhóm:\n" + "\n".join(results)
+
+def check_send_report_command(text: str) -> Optional[Dict]:
+    """
+    Kiểm tra xem có phải lệnh gửi báo cáo đến nhóm không
+    Ví dụ: "gửi báo cáo KPI cho nhóm MKT Team"
+    """
+    text_lower = text.lower()
+    
+    # Kiểm tra có phải lệnh gửi không
+    send_keywords = ["gửi", "gui", "send", "broadcast", "gởi"]
+    if not any(kw in text_lower for kw in send_keywords):
+        return None
+    
+    # Kiểm tra có nhắc đến nhóm không
+    group_keywords = ["nhóm", "nhom", "group", "cho"]
+    if not any(kw in text_lower for kw in group_keywords):
+        return None
+    
+    # Xác định loại báo cáo
+    report_type = "dashboard"  # Mặc định
+    if "kpi" in text_lower:
+        report_type = "kpi"
+    elif "top koc" in text_lower or "doanh số" in text_lower:
+        report_type = "top_koc"
+    elif "cảnh báo" in text_lower or "canh bao" in text_lower or "warning" in text_lower:
+        report_type = "canh_bao"
+    elif "dashboard" in text_lower or "tình hình" in text_lower:
+        report_type = "dashboard"
+    
+    # Xác định tháng
+    month = datetime.now().month
+    month_match = re.search(r'tháng\s*(\d+)|thang\s*(\d+)', text_lower)
+    if month_match:
+        month = int(month_match.group(1) or month_match.group(2))
+    
+    # Xác định nhóm
+    target_group = None
+    for group_name, group_key in GROUP_NAME_MAPPING.items():
+        if group_name in text_lower:
+            target_group = group_key
+            break
+    
+    if not target_group:
+        return None
+    
+    return {
+        "report_type": report_type,
+        "month": month,
+        "target_group": target_group
+    }
+
+
+async def handle_send_report_to_group(params: Dict) -> str:
+    """Xử lý gửi báo cáo đến nhóm"""
+    from lark_base import generate_dashboard_summary
+    from report_generator import generate_dashboard_report_text
+    
+    report_type = params.get("report_type", "dashboard")
+    month = params.get("month", datetime.now().month)
+    target_group = params.get("target_group")
+    
+    try:
+        # Lấy dữ liệu Dashboard
+        dashboard_data = await generate_dashboard_summary(month=month)
+        
+        # Sinh báo cáo
+        if report_type == "kpi":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="kpi_nhan_su")
+        elif report_type == "top_koc":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="top_koc")
+        elif report_type == "canh_bao":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="canh_bao")
+        else:
+            report = await generate_dashboard_report_text(dashboard_data, report_type="full")
+        
+        # Gửi đến nhóm
+        if target_group == "all":
+            # Gửi đến tất cả nhóm
+            results = []
+            for group_name, chat_id in GROUP_CHATS.items():
+                try:
+                    await send_lark_message(chat_id, report)
+                    results.append(f"✅ {group_name}")
+                except Exception as e:
+                    results.append(f"❌ {group_name}: {str(e)}")
+            
+            return f"📤 Đã gửi báo cáo {report_type.upper()} tháng {month} đến:\n" + "\n".join(results)
+        else:
+            # Gửi đến 1 nhóm cụ thể
+            chat_id = GROUP_CHATS.get(target_group)
+            if not chat_id:
+                return f"❌ Không tìm thấy nhóm '{target_group}'. Các nhóm có sẵn: {', '.join(GROUP_CHATS.keys())}"
+            
+            await send_lark_message(chat_id, report)
+            return f"✅ Đã gửi báo cáo {report_type.upper()} tháng {month} đến nhóm {target_group}"
+    
+    except Exception as e:
+        return f"❌ Lỗi khi gửi báo cáo: {str(e)}"
+
+
 # ============ MESSAGE HANDLER ============
 async def process_jarvis_query(text: str) -> str:
     """
     Xử lý câu hỏi và trả về response
     """
     print(f"🔍 Processing query: {text}")
+    
+    # 0a. Kiểm tra lệnh gửi tin nhắn tùy chỉnh đến nhóm
+    custom_msg_result = check_custom_message_command(text)
+    if custom_msg_result:
+        return await handle_custom_message_to_groups(custom_msg_result)
+    
+    # 0b. Kiểm tra lệnh gửi báo cáo đến nhóm
+    send_report_result = check_send_report_command(text)
+    if send_report_result:
+        return await handle_send_report_to_group(send_report_result)
     
     # 1. Phân loại intent
     intent_result = classify_intent(text)
@@ -260,10 +528,9 @@ async def process_jarvis_query(text: str) -> str:
                 "Bạn có thể hỏi tôi về:\n"
                 "• Báo cáo KOC: \"Tóm tắt KOC tháng 12\"\n"
                 "• Tình hình booking: \"Cập nhật tình hình booking tháng 12\"\n"
-                "• KPI cá nhân: \"KPI của Mai tháng 12\" hoặc \"KPI Trà Mi\"\n"
-                "• Cảnh báo KPI: \"Cảnh báo KPI tháng 12\"\n"
-                "• Top KOC: \"Top KOC doanh số tháng 12\"\n"
-                "• Task: \"Task quá hạn theo vị trí\"\n"
+                "• KPI cá nhân: \"KPI của Mai tháng 12\"\n"
+                "• Gửi báo cáo: \"Gửi báo cáo KPI cho nhóm MKT Team\"\n"
+                "• Thông báo: \"Thông báo [nội dung] vào nhóm MKT Team và Booking\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
                 "Hãy thử hỏi tôi nhé! 😊"
             )
@@ -383,7 +650,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.7.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.8.1"}
 
 @app.get("/health")
 async def health():
