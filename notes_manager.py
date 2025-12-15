@@ -24,8 +24,10 @@ class Note:
     category: str
     created_at: datetime
     created_by: str = ""
+    chat_id: str = ""  # Chat ID để gửi reminder
     deadline: Optional[datetime] = None
     is_done: bool = False
+    reminder_sent: bool = False  # Đã gửi reminder chưa
     
     def to_dict(self) -> Dict:
         return {
@@ -34,8 +36,10 @@ class Note:
             "category": self.category,
             "created_at": self.created_at.isoformat(),
             "created_by": self.created_by,
+            "chat_id": self.chat_id,
             "deadline": self.deadline.isoformat() if self.deadline else None,
-            "is_done": self.is_done
+            "is_done": self.is_done,
+            "reminder_sent": self.reminder_sent
         }
 
 
@@ -46,7 +50,7 @@ class NotesManager:
         self._notes: Dict[int, Note] = {}
         self._next_id: int = 1
     
-    def add_note(self, content: str, created_by: str = "") -> Note:
+    def add_note(self, content: str, created_by: str = "", chat_id: str = "") -> Note:
         """Thêm note mới và tự động phân loại"""
         category, deadline = self._classify_note(content)
         
@@ -56,6 +60,7 @@ class NotesManager:
             category=category,
             created_at=datetime.now(),
             created_by=created_by,
+            chat_id=chat_id,
             deadline=deadline
         )
         
@@ -100,7 +105,9 @@ class NotesManager:
     
     def _extract_deadline_days(self, content: str) -> Optional[int]:
         """Trích xuất số ngày deadline từ nội dung"""
-        # Pattern: "deadline X ngày", "X ngày nữa", "trong X ngày"
+        now = datetime.now()
+        
+        # 1. Pattern: "deadline X ngày", "X ngày nữa", "trong X ngày"
         patterns = [
             r'deadline\s*(\d+)\s*ngày',
             r'(\d+)\s*ngày\s*nữa',
@@ -114,13 +121,58 @@ class NotesManager:
             if match:
                 return int(match.group(1))
         
-        # Check "tuần sau", "tuần tới"
+        # 2. Pattern: ngày cụ thể "ngày DD/MM" hoặc "DD/MM"
+        date_patterns = [
+            r'ngày\s*(\d{1,2})[/\-](\d{1,2})',  # ngày 16/12
+            r'deadline\s*ngày\s*(\d{1,2})[/\-](\d{1,2})',  # deadline ngày 16/12
+            r'(\d{1,2})[/\-](\d{1,2})',  # 16/12
+        ]
+        
+        for pattern in date_patterns:
+            match = re.search(pattern, content)
+            if match:
+                try:
+                    day = int(match.group(1))
+                    month = int(match.group(2))
+                    year = now.year
+                    
+                    # Nếu tháng đã qua, có thể là năm sau
+                    target_date = datetime(year, month, day)
+                    if target_date < now:
+                        target_date = datetime(year + 1, month, day)
+                    
+                    days_diff = (target_date - now).days
+                    if days_diff >= 0:
+                        return days_diff
+                except:
+                    pass
+        
+        # 3. Check "tuần sau", "tuần tới"
         if "tuần sau" in content or "tuan sau" in content or "tuần tới" in content:
             return 7
         
-        # Check "tháng sau"
+        # 4. Check "tháng sau"
         if "tháng sau" in content or "thang sau" in content:
             return 30
+        
+        # 5. Check "thứ X" - tính ngày đến thứ X tiếp theo
+        weekday_map = {
+            "thứ 2": 0, "thứ hai": 0, "thu 2": 0,
+            "thứ 3": 1, "thứ ba": 1, "thu 3": 1,
+            "thứ 4": 2, "thứ tư": 2, "thu 4": 2,
+            "thứ 5": 3, "thứ năm": 3, "thu 5": 3,
+            "thứ 6": 4, "thứ sáu": 4, "thu 6": 4,
+            "thứ 7": 5, "thứ bảy": 5, "thu 7": 5,
+            "chủ nhật": 6, "chu nhat": 6, "cn": 6,
+        }
+        
+        for weekday_name, weekday_num in weekday_map.items():
+            if weekday_name in content:
+                current_weekday = now.weekday()
+                days_until = (weekday_num - current_weekday) % 7
+                if days_until == 0:
+                    days_until = 7  # Nếu là cùng ngày, tính tuần sau
+                return days_until
         
         return None
     
@@ -178,6 +230,44 @@ class NotesManager:
         self._notes.clear()
         self._next_id = 1
         return count
+    
+    def get_notes_due_soon(self, days: int = 1) -> List[Note]:
+        """Lấy notes có deadline trong X ngày tới và chưa gửi reminder"""
+        now = datetime.now()
+        due_notes = []
+        
+        for note in self._notes.values():
+            if note.is_done or note.reminder_sent:
+                continue
+            
+            if note.deadline:
+                days_left = (note.deadline - now).days
+                if 0 <= days_left <= days:
+                    due_notes.append(note)
+        
+        return due_notes
+    
+    def get_overdue_notes(self) -> List[Note]:
+        """Lấy notes đã quá hạn"""
+        now = datetime.now()
+        overdue = []
+        
+        for note in self._notes.values():
+            if note.is_done:
+                continue
+            
+            if note.deadline and note.deadline < now:
+                overdue.append(note)
+        
+        return overdue
+    
+    def mark_reminder_sent(self, note_id: int) -> bool:
+        """Đánh dấu đã gửi reminder"""
+        note = self._notes.get(note_id)
+        if note:
+            note.reminder_sent = True
+            return True
+        return False
 
 
 # Global instance
@@ -280,31 +370,65 @@ def check_note_command(text: str) -> Optional[Dict]:
     if "xóa tất cả note" in text_lower or "xoa tat ca note" in text_lower or "clear notes" in text_lower:
         return {"action": "clear_all"}
     
-    # 5. Lệnh thêm note mới - patterns với ^ (bắt đầu)
-    add_patterns = [
-        (r'^note[:\s]+(.+)$', 1),
-        (r'^ghi nhớ[:\s]+(.+)$', 1),
-        (r'^ghi nho[:\s]+(.+)$', 1),
-        (r'^nhớ[:\s]+(.+)$', 1),
-        (r'^nho[:\s]+(.+)$', 1),
-        (r'^todo[:\s]+(.+)$', 1),
-        (r'^deadline[:\s]+(.+)$', 1),
-        (r'^công việc[:\s]+(.+)$', 1),
-        (r'^cong viec[:\s]+(.+)$', 1),
+    # 5. Kiểm tra có phải lệnh thêm note không
+    # Patterns để nhận diện bắt đầu note
+    note_start_patterns = [
+        r'^note\s*[:\s]',
+        r'^ghi nhớ\s*[:\s]',
+        r'^ghi nho\s*[:\s]',
+        r'^nhớ\s*[:\s]',
+        r'^nho\s*[:\s]',
+        r'^todo\s*[:\s]',
+        r'^deadline\s*[:\s]',
+        r'^công việc\s*[:\s]',
+        r'^cong viec\s*[:\s]',
+        r'^vấn đề\s*[:\s]',
+        r'^van de\s*[:\s]',
     ]
     
-    for pattern, group in add_patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            # Lấy nội dung gốc (giữ nguyên case) từ text_clean
-            original_match = re.search(pattern, text_clean, re.IGNORECASE)
-            if original_match:
-                content = original_match.group(group).strip()
-                return {"action": "add", "content": content}
+    is_note_command = any(re.search(pattern, text_lower) for pattern in note_start_patterns)
+    
+    if is_note_command:
+        # Lấy nội dung sau keyword
+        content = re.sub(
+            r'^(note|ghi nhớ|ghi nho|nhớ|nho|todo|deadline|công việc|cong viec|vấn đề|van de)\s*[:\s]*',
+            '', text_clean, flags=re.IGNORECASE
+        ).strip()
+        
+        if not content:
+            return None
+        
+        # Check nếu có nhiều items (bullet points)
+        # Chỉ split khi có newline + bullet, KHÔNG split nếu chỉ có "-" trong content
+        lines = content.split('\n')
+        items = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Remove bullet/number prefix nếu ở đầu dòng
+            # Patterns: •, - ở đầu dòng (với space sau), *, số thứ tự
+            cleaned_line = re.sub(r'^[•\*]\s*', '', line)  # • hoặc *
+            cleaned_line = re.sub(r'^-\s+', '', cleaned_line)  # - với space (để phân biệt với - trong content)
+            cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', cleaned_line)  # 1. hoặc 1)
+            cleaned_line = cleaned_line.strip()
+            
+            if cleaned_line:
+                items.append(cleaned_line)
+        
+        if len(items) > 1:
+            # Nhiều notes
+            return {"action": "add_multiple", "contents": items}
+        elif len(items) == 1:
+            # 1 note
+            return {"action": "add", "content": items[0]}
+        else:
+            return {"action": "add", "content": content}
     
     # 6. Check nếu bắt đầu bằng "Vấn đề" (không cần dấu :)
     if text_lower.startswith("vấn đề") or text_lower.startswith("van de"):
-        # Lấy nội dung sau "Vấn đề"
         content = re.sub(r'^(vấn đề|van de)[:\s]*', '', text_clean, flags=re.IGNORECASE).strip()
         if content:
             return {"action": "add", "content": f"Vấn đề: {content}"}
@@ -312,7 +436,7 @@ def check_note_command(text: str) -> Optional[Dict]:
     return None
 
 
-async def handle_note_command(params: Dict, user_name: str = "") -> str:
+async def handle_note_command(params: Dict, user_name: str = "", chat_id: str = "") -> str:
     """Xử lý các lệnh note"""
     manager = get_notes_manager()
     action = params.get("action")
@@ -326,14 +450,41 @@ async def handle_note_command(params: Dict, user_name: str = "") -> str:
         if not content:
             return "❌ Nội dung note không được trống"
         
-        note = manager.add_note(content, created_by=user_name)
+        note = manager.add_note(content, created_by=user_name, chat_id=chat_id)
         
         deadline_str = ""
+        reminder_str = ""
         if note.deadline:
             days = (note.deadline - datetime.now()).days
             deadline_str = f"\n📅 Deadline: {days} ngày"
+            reminder_str = f"\n🔔 Sẽ nhắc nhở khi còn 1 ngày"
         
-        return f"✅ Đã ghi nhớ #{note.id}\n\n{note.category}\n📝 {note.content}{deadline_str}"
+        return f"✅ Đã ghi nhớ #{note.id}\n\n{note.category}\n📝 {note.content}{deadline_str}{reminder_str}"
+    
+    elif action == "add_multiple":
+        contents = params.get("contents", [])
+        if not contents:
+            return "❌ Không có nội dung note"
+        
+        results = []
+        success_count = 0
+        
+        for content in contents:
+            note = manager.add_note(content, created_by=user_name, chat_id=chat_id)
+            
+            deadline_str = ""
+            if note.deadline:
+                days = (note.deadline - datetime.now()).days
+                deadline_str = f" (deadline {days} ngày)"
+            
+            results.append(f"  #{note.id}: {note.content[:50]}{'...' if len(note.content) > 50 else ''}{deadline_str}")
+            success_count += 1
+        
+        response = f"✅ Đã ghi nhớ {success_count} công việc:\n\n"
+        response += "\n".join(results)
+        response += "\n\n💡 Dùng \"Xem note\" để xem chi tiết"
+        
+        return response
     
     elif action == "done":
         note_id = params.get("note_id")

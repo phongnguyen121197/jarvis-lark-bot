@@ -8,8 +8,9 @@ import base64
 import hashlib
 import time
 import re
+import asyncio
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import CBC
@@ -18,6 +19,8 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import httpx
 from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +30,14 @@ from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT
 from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, generate_dashboard_summary, test_connection
 from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, chat_with_gpt
 from notes_manager import check_note_command, handle_note_command, get_notes_manager
+
+# ============ SCHEDULER CONFIG ============
+REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))  # Giờ gửi reminder (mặc định 9h sáng)
+REMINDER_MINUTE = int(os.getenv("REMINDER_MINUTE", "0"))
+TIMEZONE = "Asia/Ho_Chi_Minh"
+
+# Initialize scheduler
+scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
 # ============ CONFIG ============
 LARK_APP_ID = os.getenv("LARK_APP_ID")
@@ -410,7 +421,7 @@ async def handle_send_report_to_group(params: Dict) -> str:
 
 
 # ============ MESSAGE HANDLER ============
-async def process_jarvis_query(text: str) -> str:
+async def process_jarvis_query(text: str, chat_id: str = "") -> str:
     """
     Xử lý câu hỏi và trả về response
     """
@@ -419,7 +430,7 @@ async def process_jarvis_query(text: str) -> str:
     # 0a. Kiểm tra lệnh ghi nhớ (notes)
     note_result = check_note_command(text)
     if note_result:
-        return await handle_note_command(note_result)
+        return await handle_note_command(note_result, chat_id=chat_id)
     
     # 0b. Kiểm tra lệnh gửi tin nhắn tùy chỉnh đến nhóm
     custom_msg_result = check_custom_message_command(text)
@@ -643,8 +654,8 @@ async def handle_message_event(event: dict):
         mention_key = mention.get("key", "")
         clean_text = clean_text.replace(mention_key, "").strip()
     
-    # Process query
-    response_text = await process_jarvis_query(clean_text or text)
+    # Process query (truyền chat_id để lưu vào notes nếu cần)
+    response_text = await process_jarvis_query(clean_text or text, chat_id=chat_id)
     
     # Double check before sending (in case of race condition)
     if message_id and is_message_processed(message_id):
@@ -655,10 +666,107 @@ async def handle_message_event(event: dict):
     await send_lark_message(chat_id, response_text)
     print(f"✅ Response sent")
 
+
+# ============ REMINDER SCHEDULER ============
+
+async def check_and_send_reminders():
+    """Check notes sắp đến deadline và gửi reminder"""
+    print(f"🔔 Running reminder check at {datetime.now()}")
+    
+    manager = get_notes_manager()
+    
+    # Lấy notes có deadline trong 1 ngày tới
+    due_soon = manager.get_notes_due_soon(days=1)
+    
+    # Lấy notes đã quá hạn
+    overdue = manager.get_overdue_notes()
+    
+    reminders_sent = 0
+    
+    # Gửi reminder cho notes sắp đến deadline
+    for note in due_soon:
+        if note.chat_id:
+            days_left = (note.deadline - datetime.now()).days
+            hours_left = int((note.deadline - datetime.now()).total_seconds() / 3600)
+            
+            if days_left <= 0:
+                time_str = f"còn {hours_left} giờ" if hours_left > 0 else "HẾT HẠN HÔM NAY"
+            else:
+                time_str = f"còn {days_left} ngày"
+            
+            reminder_msg = (
+                f"🔔 **NHẮC NHỞ DEADLINE**\n\n"
+                f"📝 #{note.id}: {note.content}\n"
+                f"⏰ Deadline: {time_str}\n\n"
+                f"💡 Reply \"Xong #{note.id}\" khi hoàn thành"
+            )
+            
+            try:
+                await send_lark_message(note.chat_id, reminder_msg)
+                manager.mark_reminder_sent(note.id)
+                reminders_sent += 1
+                print(f"✅ Sent reminder for note #{note.id}")
+            except Exception as e:
+                print(f"❌ Failed to send reminder for note #{note.id}: {e}")
+    
+    # Gửi cảnh báo cho notes đã quá hạn
+    for note in overdue:
+        if note.chat_id and not note.reminder_sent:
+            overdue_days = (datetime.now() - note.deadline).days
+            
+            warning_msg = (
+                f"⚠️ **CẢNH BÁO QUÁ HẠN**\n\n"
+                f"📝 #{note.id}: {note.content}\n"
+                f"❌ Đã quá hạn {overdue_days} ngày!\n\n"
+                f"💡 Reply \"Xong #{note.id}\" khi hoàn thành"
+            )
+            
+            try:
+                await send_lark_message(note.chat_id, warning_msg)
+                manager.mark_reminder_sent(note.id)
+                reminders_sent += 1
+                print(f"✅ Sent overdue warning for note #{note.id}")
+            except Exception as e:
+                print(f"❌ Failed to send warning for note #{note.id}: {e}")
+    
+    print(f"🔔 Reminder check complete. Sent {reminders_sent} reminders.")
+    return reminders_sent
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Khởi động scheduler khi app start"""
+    # Schedule reminder check hàng ngày vào giờ cố định
+    scheduler.add_job(
+        check_and_send_reminders,
+        CronTrigger(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, timezone=TIMEZONE),
+        id="daily_reminder",
+        replace_existing=True
+    )
+    
+    # Thêm job check mỗi 6 giờ để bắt những deadline gấp (0h, 6h, 12h, 18h)
+    scheduler.add_job(
+        check_and_send_reminders,
+        CronTrigger(hour="0,6,12,18", minute=0, timezone=TIMEZONE),
+        id="periodic_reminder",
+        replace_existing=True
+    )
+    
+    scheduler.start()
+    print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Dừng scheduler khi app shutdown"""
+    scheduler.shutdown()
+    print("🛑 Scheduler stopped")
+
+
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.9.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.1"}
 
 @app.get("/health")
 async def health():
@@ -1007,6 +1115,75 @@ async def delete_note_api(note_id: int):
     
     manager.delete_note(note_id)
     return {"success": True, "message": f"Đã xóa #{note_id}"}
+
+
+# ============ REMINDER ENDPOINTS ============
+
+@app.get("/reminders/check")
+async def check_reminders():
+    """Trigger kiểm tra và gửi reminders thủ công"""
+    try:
+        count = await check_and_send_reminders()
+        return {
+            "success": True,
+            "reminders_sent": count,
+            "checked_at": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/reminders/status")
+async def reminder_status():
+    """Xem trạng thái scheduler và notes sắp deadline"""
+    manager = get_notes_manager()
+    
+    due_soon = manager.get_notes_due_soon(days=1)
+    overdue = manager.get_overdue_notes()
+    
+    # Lấy thông tin jobs
+    jobs = []
+    for job in scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None
+        })
+    
+    return {
+        "scheduler_running": scheduler.running,
+        "reminder_time": f"{REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}",
+        "scheduled_jobs": jobs,
+        "notes_due_soon": [n.to_dict() for n in due_soon],
+        "notes_overdue": [n.to_dict() for n in overdue]
+    }
+
+
+@app.get("/reminders/config")
+async def reminder_config(hour: int = None, minute: int = None):
+    """Xem/thay đổi config reminder (chỉ trong session này)"""
+    global REMINDER_HOUR, REMINDER_MINUTE
+    
+    changed = False
+    if hour is not None and 0 <= hour <= 23:
+        REMINDER_HOUR = hour
+        changed = True
+    if minute is not None and 0 <= minute <= 59:
+        REMINDER_MINUTE = minute
+        changed = True
+    
+    if changed:
+        # Reschedule job với giờ mới
+        scheduler.reschedule_job(
+            "daily_reminder",
+            trigger=CronTrigger(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, timezone=TIMEZONE)
+        )
+    
+    return {
+        "reminder_hour": REMINDER_HOUR,
+        "reminder_minute": REMINDER_MINUTE,
+        "timezone": TIMEZONE,
+        "changed": changed
+    }
 
 
 @app.get("/send-to-group/{chat_id}")
