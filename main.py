@@ -219,6 +219,13 @@ def check_custom_message_command(text: str) -> Optional[Dict]:
     """
     text_lower = text.lower()
     
+    # SAFEGUARD: Nếu là note command thì skip
+    # Loại bỏ @Jarvis ở đầu để check
+    text_clean = re.sub(r'^@?jarvis\s*', '', text_lower, flags=re.IGNORECASE).strip()
+    note_keywords = ["note:", "note ", "ghi nhớ:", "ghi nhớ ", "ghi nho:", "todo:", "công việc:", "cong viec:"]
+    if any(text_clean.startswith(kw) for kw in note_keywords):
+        return None
+    
     # Kiểm tra có phải lệnh thông báo/gửi tin không
     notify_keywords = ["thông báo", "thong bao", "gửi tin", "gui tin", "nhắn tin", "nhan tin", "notify", "gởi tin"]
     is_notify = any(kw in text_lower for kw in notify_keywords)
@@ -429,6 +436,7 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
     
     # 0a. Kiểm tra lệnh ghi nhớ (notes)
     note_result = check_note_command(text)
+    print(f"📝 Note check result: {note_result}")
     if note_result:
         return await handle_note_command(note_result, chat_id=chat_id)
     
@@ -766,7 +774,7 @@ async def shutdown_event():
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.1.1"}
 
 @app.get("/health")
 async def health():

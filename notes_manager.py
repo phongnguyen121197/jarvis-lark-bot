@@ -320,9 +320,9 @@ def check_note_command(text: str) -> Optional[Dict]:
     Kiểm tra xem có phải lệnh note không
     Returns: Dict với action và params, hoặc None
     """
-    # Loại bỏ "Jarvis" ở đầu nếu có
+    # Loại bỏ "@Jarvis" hoặc "Jarvis" ở đầu nếu có
     text_clean = text.strip()
-    text_clean = re.sub(r'^jarvis\s*', '', text_clean, flags=re.IGNORECASE).strip()
+    text_clean = re.sub(r'^@?jarvis\s*', '', text_clean, flags=re.IGNORECASE).strip()
     
     text_lower = text_clean.lower().strip()
     
@@ -411,7 +411,7 @@ def check_note_command(text: str) -> Optional[Dict]:
             # Remove bullet/number prefix nếu ở đầu dòng
             # Patterns: •, - ở đầu dòng (với space sau), *, số thứ tự
             cleaned_line = re.sub(r'^[•\*]\s*', '', line)  # • hoặc *
-            cleaned_line = re.sub(r'^-\s+', '', cleaned_line)  # - với space (để phân biệt với - trong content)
+            cleaned_line = re.sub(r'^-\s*', '', cleaned_line)  # - với hoặc không có space
             cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', cleaned_line)  # 1. hoặc 1)
             cleaned_line = cleaned_line.strip()
             
