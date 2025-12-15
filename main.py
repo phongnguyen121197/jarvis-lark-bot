@@ -34,6 +34,30 @@ LARK_API_BASE = "https://open.larksuite.com/open-apis"
 TENANT_ACCESS_TOKEN_URL = f"{LARK_API_BASE}/auth/v3/tenant_access_token/internal"
 SEND_MESSAGE_URL = f"{LARK_API_BASE}/im/v1/messages"
 
+# ============ DANH SÁCH NHÓM ĐÃ ĐĂNG KÝ ============
+# Sẽ được cập nhật sau khi lấy chat_id từ logs
+GROUP_CHATS = {
+    # "ten_nhom": "chat_id"
+    # Ví dụ:
+    # "mkt_team": "oc_xxxxxxx",
+    # "booking_remote": "oc_xxxxxxx",
+}
+
+# Danh sách nhóm đã nhận tin nhắn (auto-collect từ events)
+_discovered_groups = {}
+
+def register_group(chat_id: str, chat_type: str, group_name: str = None):
+    """Đăng ký nhóm khi nhận được tin nhắn"""
+    if chat_type == "group" and chat_id:
+        _discovered_groups[chat_id] = {
+            "name": group_name or "Unknown",
+            "discovered_at": time.time()
+        }
+
+def get_discovered_groups():
+    """Lấy danh sách nhóm đã phát hiện"""
+    return _discovered_groups
+
 # Message deduplication cache
 _processed_messages = {}
 MESSAGE_CACHE_TTL = 600  # 10 minutes (tăng từ 5 phút)
@@ -306,8 +330,18 @@ async def handle_message_event(event: dict):
         mark_message_processed(message_id)
     
     chat_id = message.get("chat_id")
+    chat_type = message.get("chat_type")  # "p2p" (1-1) hoặc "group"
     message_type = message.get("message_type")
     content_str = message.get("content", "{}")
+    
+    # LOG CHI TIẾT để lấy chat_id của các nhóm
+    print(f"📍 Chat ID: {chat_id}")
+    print(f"📍 Chat Type: {chat_type}")
+    
+    # Auto-register nhóm khi nhận được tin nhắn
+    if chat_type == "group":
+        register_group(chat_id, chat_type)
+        print(f"📍 Group registered: {chat_id}")
     
     if message_type != "text":
         return
@@ -349,7 +383,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.6.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.7"}
 
 @app.get("/health")
 async def health():
@@ -632,6 +666,121 @@ async def debug_dashboard_raw(month: int):
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc(), "month": month}
+
+
+# ============ GROUP MANAGEMENT ============
+
+@app.get("/groups")
+async def list_groups():
+    """Xem danh sách nhóm đã đăng ký và đã phát hiện"""
+    return {
+        "registered_groups": GROUP_CHATS,
+        "discovered_groups": get_discovered_groups()
+    }
+
+
+@app.post("/send-to-group/{chat_id}")
+async def send_to_group(chat_id: str, message: str = "Test message from Jarvis"):
+    """Gửi tin nhắn đến một nhóm cụ thể"""
+    try:
+        await send_lark_message(chat_id, message)
+        return {"success": True, "chat_id": chat_id, "message": message}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/send-report/{report_type}/{chat_id}")
+async def send_report_to_group(report_type: str, chat_id: str, month: int = None):
+    """
+    Gửi báo cáo đến nhóm
+    report_type: "kpi", "dashboard", "top_koc", "canh_bao"
+    """
+    from lark_base import generate_dashboard_summary
+    from report_generator import generate_dashboard_report_text
+    from datetime import datetime
+    
+    if month is None:
+        month = datetime.now().month
+    
+    try:
+        # Lấy dữ liệu Dashboard
+        dashboard_data = await generate_dashboard_summary(month=month)
+        
+        # Sinh báo cáo theo loại
+        if report_type == "kpi":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="kpi_nhan_su")
+        elif report_type == "top_koc":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="top_koc")
+        elif report_type == "canh_bao":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="canh_bao")
+        else:  # dashboard - full report
+            report = await generate_dashboard_report_text(dashboard_data, report_type="full")
+        
+        # Gửi đến nhóm
+        await send_lark_message(chat_id, report)
+        
+        return {
+            "success": True,
+            "chat_id": chat_id,
+            "report_type": report_type,
+            "month": month
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+@app.post("/broadcast-report/{report_type}")
+async def broadcast_report(report_type: str, month: int = None):
+    """
+    Gửi báo cáo đến TẤT CẢ nhóm đã đăng ký
+    report_type: "kpi", "dashboard", "top_koc", "canh_bao"
+    """
+    from lark_base import generate_dashboard_summary
+    from report_generator import generate_dashboard_report_text
+    from datetime import datetime
+    
+    if month is None:
+        month = datetime.now().month
+    
+    if not GROUP_CHATS:
+        return {"success": False, "error": "Chưa có nhóm nào được đăng ký"}
+    
+    try:
+        # Lấy dữ liệu Dashboard
+        dashboard_data = await generate_dashboard_summary(month=month)
+        
+        # Sinh báo cáo
+        if report_type == "kpi":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="kpi_nhan_su")
+        elif report_type == "top_koc":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="top_koc")
+        elif report_type == "canh_bao":
+            report = await generate_dashboard_report_text(dashboard_data, report_type="canh_bao")
+        else:
+            report = await generate_dashboard_report_text(dashboard_data, report_type="full")
+        
+        # Gửi đến tất cả nhóm
+        results = {}
+        for group_name, chat_id in GROUP_CHATS.items():
+            try:
+                await send_lark_message(chat_id, report)
+                results[group_name] = "✅ Sent"
+            except Exception as e:
+                results[group_name] = f"❌ Error: {str(e)}"
+        
+        return {
+            "success": True,
+            "report_type": report_type,
+            "month": month,
+            "results": results
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # ============ RUN ============
