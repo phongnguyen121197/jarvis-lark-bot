@@ -26,6 +26,7 @@ load_dotenv()
 from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_GPT_CHAT, INTENT_DASHBOARD, INTENT_UNKNOWN
 from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, generate_dashboard_summary, test_connection
 from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, chat_with_gpt
+from notes_manager import check_note_command, handle_note_command, get_notes_manager
 
 # ============ CONFIG ============
 LARK_APP_ID = os.getenv("LARK_APP_ID")
@@ -415,12 +416,17 @@ async def process_jarvis_query(text: str) -> str:
     """
     print(f"🔍 Processing query: {text}")
     
-    # 0a. Kiểm tra lệnh gửi tin nhắn tùy chỉnh đến nhóm
+    # 0a. Kiểm tra lệnh ghi nhớ (notes)
+    note_result = check_note_command(text)
+    if note_result:
+        return await handle_note_command(note_result)
+    
+    # 0b. Kiểm tra lệnh gửi tin nhắn tùy chỉnh đến nhóm
     custom_msg_result = check_custom_message_command(text)
     if custom_msg_result:
         return await handle_custom_message_to_groups(custom_msg_result)
     
-    # 0b. Kiểm tra lệnh gửi báo cáo đến nhóm
+    # 0c. Kiểm tra lệnh gửi báo cáo đến nhóm
     send_report_result = check_send_report_command(text)
     if send_report_result:
         return await handle_send_report_to_group(send_report_result)
@@ -530,7 +536,9 @@ async def process_jarvis_query(text: str) -> str:
                 "• Tình hình booking: \"Cập nhật tình hình booking tháng 12\"\n"
                 "• KPI cá nhân: \"KPI của Mai tháng 12\"\n"
                 "• Gửi báo cáo: \"Gửi báo cáo KPI cho nhóm MKT Team\"\n"
-                "• Thông báo: \"Thông báo [nội dung] vào nhóm MKT Team và Booking\"\n"
+                "• Thông báo: \"Thông báo [nội dung] vào nhóm MKT Team\"\n"
+                "• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n"
+                "• Xem notes: \"Tổng hợp note\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
                 "Hãy thử hỏi tôi nhé! 😊"
             )
@@ -650,7 +658,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.8.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.9"}
 
 @app.get("/health")
 async def health():
@@ -944,6 +952,61 @@ async def list_groups():
         "registered_groups": GROUP_CHATS,
         "discovered_groups": get_discovered_groups()
     }
+
+
+# ============ NOTES MANAGEMENT ============
+
+@app.get("/notes")
+async def view_notes():
+    """Xem tất cả notes"""
+    manager = get_notes_manager()
+    summary = manager.get_summary()
+    
+    result = {}
+    for category, notes in summary.items():
+        result[category] = [n.to_dict() for n in notes]
+    
+    return {
+        "total": sum(len(notes) for notes in summary.values()),
+        "notes": result
+    }
+
+
+@app.get("/notes/add")
+async def add_note_api(content: str):
+    """Thêm note qua API"""
+    manager = get_notes_manager()
+    note = manager.add_note(content)
+    return {
+        "success": True,
+        "note": note.to_dict()
+    }
+
+
+@app.get("/notes/done/{note_id}")
+async def mark_note_done(note_id: int):
+    """Đánh dấu note hoàn thành"""
+    manager = get_notes_manager()
+    note = manager.get_note(note_id)
+    
+    if not note:
+        return {"success": False, "error": f"Note #{note_id} không tồn tại"}
+    
+    manager.mark_done(note_id)
+    return {"success": True, "message": f"Đã hoàn thành #{note_id}"}
+
+
+@app.get("/notes/delete/{note_id}")
+async def delete_note_api(note_id: int):
+    """Xóa note"""
+    manager = get_notes_manager()
+    note = manager.get_note(note_id)
+    
+    if not note:
+        return {"success": False, "error": f"Note #{note_id} không tồn tại"}
+    
+    manager.delete_note(note_id)
+    return {"success": True, "message": f"Đã xóa #{note_id}"}
 
 
 @app.get("/send-to-group/{chat_id}")
