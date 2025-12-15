@@ -230,16 +230,21 @@ def check_note_command(text: str) -> Optional[Dict]:
     Kiểm tra xem có phải lệnh note không
     Returns: Dict với action và params, hoặc None
     """
-    text_lower = text.lower().strip()
+    # Loại bỏ "Jarvis" ở đầu nếu có
+    text_clean = text.strip()
+    text_clean = re.sub(r'^jarvis\s*', '', text_clean, flags=re.IGNORECASE).strip()
+    
+    text_lower = text_clean.lower().strip()
     
     # 1. Lệnh xem tổng hợp notes
     summary_keywords = [
         "tổng hợp note", "tong hop note",
         "xem note", "xem ghi nhớ", "xem ghi nho",
         "danh sách note", "danh sach note",
-        "list note", "notes", "ghi nhớ",
+        "list note", "notes", "ghi nhớ của tôi",
         "việc cần làm", "viec can lam",
-        "todo", "to do", "to-do"
+        "todo", "to do", "to-do",
+        "xem todo", "danh sách công việc"
     ]
     if any(kw in text_lower for kw in summary_keywords):
         return {"action": "summary"}
@@ -275,7 +280,7 @@ def check_note_command(text: str) -> Optional[Dict]:
     if "xóa tất cả note" in text_lower or "xoa tat ca note" in text_lower or "clear notes" in text_lower:
         return {"action": "clear_all"}
     
-    # 5. Lệnh thêm note mới
+    # 5. Lệnh thêm note mới - patterns với ^ (bắt đầu)
     add_patterns = [
         (r'^note[:\s]+(.+)$', 1),
         (r'^ghi nhớ[:\s]+(.+)$', 1),
@@ -283,23 +288,26 @@ def check_note_command(text: str) -> Optional[Dict]:
         (r'^nhớ[:\s]+(.+)$', 1),
         (r'^nho[:\s]+(.+)$', 1),
         (r'^todo[:\s]+(.+)$', 1),
-        (r'^vấn đề[:\s]+(.+)$', 1),
-        (r'^van de[:\s]+(.+)$', 1),
         (r'^deadline[:\s]+(.+)$', 1),
+        (r'^công việc[:\s]+(.+)$', 1),
+        (r'^cong viec[:\s]+(.+)$', 1),
     ]
     
     for pattern, group in add_patterns:
         match = re.search(pattern, text_lower)
         if match:
-            # Lấy nội dung gốc (giữ nguyên case)
-            original_match = re.search(pattern, text, re.IGNORECASE)
+            # Lấy nội dung gốc (giữ nguyên case) từ text_clean
+            original_match = re.search(pattern, text_clean, re.IGNORECASE)
             if original_match:
                 content = original_match.group(group).strip()
                 return {"action": "add", "content": content}
     
     # 6. Check nếu bắt đầu bằng "Vấn đề" (không cần dấu :)
     if text_lower.startswith("vấn đề") or text_lower.startswith("van de"):
-        return {"action": "add", "content": text.strip()}
+        # Lấy nội dung sau "Vấn đề"
+        content = re.sub(r'^(vấn đề|van de)[:\s]*', '', text_clean, flags=re.IGNORECASE).strip()
+        if content:
+            return {"action": "add", "content": f"Vấn đề: {content}"}
     
     return None
 
