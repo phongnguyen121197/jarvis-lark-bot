@@ -383,7 +383,7 @@ async def handle_message_event(event: dict):
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.7"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "4.7.1"}
 
 @app.get("/health")
 async def health():
@@ -679,7 +679,7 @@ async def list_groups():
     }
 
 
-@app.post("/send-to-group/{chat_id}")
+@app.get("/send-to-group/{chat_id}")
 async def send_to_group(chat_id: str, message: str = "Test message from Jarvis"):
     """Gửi tin nhắn đến một nhóm cụ thể"""
     try:
@@ -689,7 +689,7 @@ async def send_to_group(chat_id: str, message: str = "Test message from Jarvis")
         return {"success": False, "error": str(e)}
 
 
-@app.post("/send-report/{report_type}/{chat_id}")
+@app.get("/send-report/{report_type}/{chat_id}")
 async def send_report_to_group(report_type: str, chat_id: str, month: int = None):
     """
     Gửi báo cáo đến nhóm
@@ -734,7 +734,7 @@ async def send_report_to_group(report_type: str, chat_id: str, month: int = None
         }
 
 
-@app.post("/broadcast-report/{report_type}")
+@app.get("/broadcast-report/{report_type}")
 async def broadcast_report(report_type: str, month: int = None):
     """
     Gửi báo cáo đến TẤT CẢ nhóm đã đăng ký
