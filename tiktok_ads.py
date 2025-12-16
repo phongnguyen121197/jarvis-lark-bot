@@ -19,8 +19,8 @@ TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI", "https://jarvis-lark-bot-
 # Advertiser ID chính
 PRIMARY_ADVERTISER_ID = os.getenv("TIKTOK_PRIMARY_ADVERTISER_ID", "7089362853240553474")
 
-# Business Center ID (nếu có)
-BC_ID = os.getenv("TIKTOK_BC_ID", "")
+# Business Center ID
+BC_ID = os.getenv("TIKTOK_BC_ID", "7089357153495941122")
 
 # Hạn mức tín dụng (Credit Limit)
 CREDIT_LIMIT = float(os.getenv("TIKTOK_CREDIT_LIMIT", "163646248"))
@@ -113,14 +113,16 @@ async def get_advertiser_info(access_token: str, advertiser_id: str) -> Dict[str
         return result
 
 
-async def get_bc_list(access_token: str) -> Dict[str, Any]:
-    """Lấy danh sách Business Center mà user có quyền"""
+async def get_bc_balance(access_token: str, bc_id: str) -> Dict[str, Any]:
+    """
+    Lấy số dư Business Center
+    API: GET /bc/balance/get/
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{TIKTOK_API_BASE}/bc/get/",
+            f"{TIKTOK_API_BASE}/bc/balance/get/",
             params={
-                "page": 1,
-                "page_size": 10,
+                "bc_id": bc_id,
             },
             headers={
                 "Access-Token": access_token,
@@ -129,7 +131,7 @@ async def get_bc_list(access_token: str) -> Dict[str, Any]:
         )
         
         result = response.json()
-        print(f"🏢 BC list: {result}")
+        print(f"💰 BC balance: {result}")
         return result
 
 
@@ -164,7 +166,7 @@ async def get_bc_account_transaction(access_token: str, bc_id: str, advertiser_i
         return result
 
 
-async def get_advertiser_transactions(access_token: str, advertiser_id: str) -> Dict[str, Any]:
+async def get_advertiser_transactions(access_token: str, advertiser_id: str, bc_id: str) -> Dict[str, Any]:
     """
     Lấy lịch sử giao dịch của advertiser
     API: GET /advertiser/transaction/get/
@@ -173,16 +175,22 @@ async def get_advertiser_transactions(access_token: str, advertiser_id: str) -> 
     start_date = now.replace(day=1).strftime("%Y-%m-%d")
     end_date = now.strftime("%Y-%m-%d")
     
+    params = {
+        "advertiser_id": advertiser_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "page": 1,
+        "page_size": 50,
+    }
+    
+    # Thêm bc_id nếu có
+    if bc_id:
+        params["bc_id"] = bc_id
+    
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{TIKTOK_API_BASE}/advertiser/transaction/get/",
-            params={
-                "advertiser_id": advertiser_id,
-                "start_date": start_date,
-                "end_date": end_date,
-                "page": 1,
-                "page_size": 50,  # Max 50
-            },
+            params=params,
             headers={
                 "Access-Token": access_token,
                 "Content-Type": "application/json"
@@ -191,6 +199,29 @@ async def get_advertiser_transactions(access_token: str, advertiser_id: str) -> 
         
         result = response.json()
         print(f"💳 Advertiser transactions: {result}")
+        return result
+
+
+async def get_bc_account_cost(access_token: str, bc_id: str, advertiser_id: str) -> Dict[str, Any]:
+    """
+    Lấy chi phí tài khoản từ Business Center
+    API: GET /bc/account/cost/get/
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{TIKTOK_API_BASE}/bc/account/cost/get/",
+            params={
+                "bc_id": bc_id,
+                "advertiser_id": advertiser_id,
+            },
+            headers={
+                "Access-Token": access_token,
+                "Content-Type": "application/json"
+            }
+        )
+        
+        result = response.json()
+        print(f"💵 BC account cost: {result}")
         return result
 
 
@@ -208,6 +239,8 @@ async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[st
         "credit_limit": CREDIT_LIMIT,
     }
     
+    print(f"🔧 Using BC_ID: {BC_ID}")
+    
     # 1. Lấy thông tin cơ bản
     info_response = await get_advertiser_info(access_token, advertiser_id)
     if info_response.get("code") == 0:
@@ -219,33 +252,67 @@ async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[st
             result["currency"] = acc.get("currency", "VND")
             result["success"] = True
     
-    # 2. Lấy transactions để tính spending
-    tx_response = await get_advertiser_transactions(access_token, advertiser_id)
-    if tx_response.get("code") == 0:
-        transactions = tx_response.get("data", {}).get("list", [])
-        total_spending = 0
-        
-        print(f"📝 Found {len(transactions)} transactions")
-        
-        for tx in transactions:
-            amount = float(tx.get("amount", 0))
-            tx_type = tx.get("transaction_type", "")
-            payment_type = tx.get("payment_type", "")
+    # 2. Thử lấy chi phí từ BC account cost API
+    if BC_ID:
+        cost_response = await get_bc_account_cost(access_token, BC_ID, advertiser_id)
+        if cost_response.get("code") == 0:
+            cost_data = cost_response.get("data", {})
+            print(f"📊 Cost data: {cost_data}")
             
-            print(f"   TX: type={tx_type}, payment={payment_type}, amount={amount}")
+            # Lấy các field có thể chứa chi phí
+            spending = float(cost_data.get("cost", 0))
+            if spending == 0:
+                spending = float(cost_data.get("total_cost", 0))
+            if spending == 0:
+                spending = float(cost_data.get("spend", 0))
             
-            # Tính các giao dịch chi tiêu (amount âm hoặc type là cost/spend)
-            # Với postpaid account, spending thường có amount < 0
-            if amount < 0:
-                total_spending += abs(amount)
-        
-        if total_spending > 0:
-            result["spending"] = total_spending
-        
-        # Nếu không có transaction âm, thử tính từ tổng page_info
-        if result["spending"] == 0:
-            page_info = tx_response.get("data", {}).get("page_info", {})
-            print(f"📊 Page info: {page_info}")
+            if spending > 0:
+                result["spending"] = spending
+                result["success"] = True
+                return result
+    
+    # 3. Thử lấy transactions nếu chưa có spending
+    if result["spending"] == 0 and BC_ID:
+        tx_response = await get_advertiser_transactions(access_token, advertiser_id, BC_ID)
+        if tx_response.get("code") == 0:
+            transactions = tx_response.get("data", {}).get("list", [])
+            total_spending = 0
+            
+            print(f"📝 Found {len(transactions)} transactions")
+            
+            for tx in transactions:
+                amount = float(tx.get("amount", 0))
+                tx_type = tx.get("transaction_type", "")
+                
+                print(f"   TX: type={tx_type}, amount={amount}")
+                
+                # Tính các giao dịch chi tiêu
+                if amount < 0:
+                    total_spending += abs(amount)
+            
+            if total_spending > 0:
+                result["spending"] = total_spending
+    
+    # 4. Thử lấy BC account transaction nếu vẫn chưa có
+    if result["spending"] == 0 and BC_ID:
+        bc_tx_response = await get_bc_account_transaction(access_token, BC_ID, advertiser_id)
+        if bc_tx_response.get("code") == 0:
+            transactions = bc_tx_response.get("data", {}).get("list", [])
+            total_spending = 0
+            
+            print(f"📝 Found {len(transactions)} BC transactions")
+            
+            for tx in transactions:
+                amount = float(tx.get("amount", 0))
+                tx_type = tx.get("transaction_type", "")
+                
+                print(f"   BC TX: type={tx_type}, amount={amount}")
+                
+                if amount < 0:
+                    total_spending += abs(amount)
+            
+            if total_spending > 0:
+                result["spending"] = total_spending
     
     return result
 
