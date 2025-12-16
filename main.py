@@ -215,66 +215,101 @@ GROUP_DISPLAY_NAMES = {
 def check_custom_message_command(text: str) -> Optional[Dict]:
     """
     Kiểm tra xem có phải lệnh gửi tin nhắn tùy chỉnh không
-    Ví dụ: "Thông báo sản phẩm Dark Beauty đã về hàng vào nhóm MKT Team và Booking"
+    Ví dụ: 
+    - "Thông báo sản phẩm Dark Beauty đã về hàng vào nhóm MKT Team và Booking"
+    - "Jarvis gửi tin nhắn này: [nội dung] đến các nhóm đã kết nối"
     """
     text_lower = text.lower()
     
+    # Loại bỏ @Jarvis hoặc Jarvis ở đầu
+    text_clean = re.sub(r'^@?jarvis\s*', '', text, flags=re.IGNORECASE).strip()
+    text_clean_lower = text_clean.lower()
+    
     # SAFEGUARD: Nếu là note command thì skip
-    # Loại bỏ @Jarvis ở đầu để check
-    text_clean = re.sub(r'^@?jarvis\s*', '', text_lower, flags=re.IGNORECASE).strip()
     note_keywords = ["note:", "note ", "ghi nhớ:", "ghi nhớ ", "ghi nho:", "todo:", "công việc:", "cong viec:"]
-    if any(text_clean.startswith(kw) for kw in note_keywords):
+    if any(text_clean_lower.startswith(kw) for kw in note_keywords):
         return None
     
     # Kiểm tra có phải lệnh thông báo/gửi tin không
-    notify_keywords = ["thông báo", "thong bao", "gửi tin", "gui tin", "nhắn tin", "nhan tin", "notify", "gởi tin"]
+    notify_keywords = ["thông báo", "thong bao", "gửi tin", "gui tin", "nhắn tin", "nhan tin", "notify", "gởi tin", "gửi tin nhắn", "gui tin nhan"]
     is_notify = any(kw in text_lower for kw in notify_keywords)
     
     if not is_notify:
         return None
     
     # Kiểm tra có nhắc đến nhóm không
-    group_indicators = ["nhóm", "nhom", "group", "vào", "vao", "cho", "đến", "den", "tới", "toi"]
+    group_indicators = ["nhóm", "nhom", "group"]
     has_group = any(kw in text_lower for kw in group_indicators)
     
     if not has_group:
         return None
     
+    # Check pattern "đến các nhóm đã kết nối" hoặc "đến tất cả nhóm" → target all groups
+    all_groups_patterns = [
+        r'đến\s+(các\s+)?nhóm\s+đã\s+kết\s+nối',
+        r'den\s+(cac\s+)?nhom\s+da\s+ket\s+noi',
+        r'đến\s+tất\s+cả\s+(các\s+)?nhóm',
+        r'den\s+tat\s+ca\s+(cac\s+)?nhom',
+        r'cho\s+tất\s+cả\s+(các\s+)?nhóm',
+        r'vào\s+tất\s+cả\s+(các\s+)?nhóm',
+    ]
+    
+    is_all_groups = any(re.search(pattern, text_lower) for pattern in all_groups_patterns)
+    
     # Tìm tất cả các nhóm được nhắc đến
     target_groups = []
-    for group_name, group_key in GROUP_NAME_MAPPING.items():
-        if group_name in text_lower:
-            if group_key not in target_groups:
-                target_groups.append(group_key)
+    
+    if is_all_groups:
+        target_groups = ["all"]
+    else:
+        for group_name, group_key in GROUP_NAME_MAPPING.items():
+            if group_name in text_lower:
+                if group_key not in target_groups:
+                    target_groups.append(group_key)
     
     if not target_groups:
         return None
     
     # Trích xuất nội dung tin nhắn
-    # Tìm vị trí bắt đầu của phần chỉ định nhóm
+    # Pattern 1: "gửi tin nhắn này: [content] đến nhóm"
+    match_pattern1 = re.search(r'gửi\s+tin\s+nhắn\s+(này\s*)?[:\s]+(.+?)\s+(đến|vào|cho)\s+(các\s+)?nhóm', text_clean, re.IGNORECASE | re.DOTALL)
+    if match_pattern1:
+        message_content = match_pattern1.group(2).strip()
+        if message_content:
+            return {
+                "type": "custom_message",
+                "message": message_content,
+                "target_groups": target_groups
+            }
+    
+    # Pattern 2: "thông báo [content] vào nhóm"
     group_start_patterns = [
         r'vào\s+nhóm', r'vao\s+nhom',
         r'cho\s+nhóm', r'cho\s+nhom',
         r'đến\s+nhóm', r'den\s+nhom',
+        r'đến\s+các\s+nhóm', r'den\s+cac\s+nhom',
         r'tới\s+nhóm', r'toi\s+nhom',
         r'vào\s+group', r'cho\s+group',
+        r'đến\s+tất\s+cả', r'vào\s+tất\s+cả',
+        r'cho\s+tất\s+cả',
     ]
     
-    message_content = text
+    message_content = text_clean
     for pattern in group_start_patterns:
-        match = re.search(pattern, text_lower)
+        match = re.search(pattern, text_clean_lower)
         if match:
-            message_content = text[:match.start()].strip()
+            message_content = text_clean[:match.start()].strip()
             break
     
-    # Loại bỏ các keyword thông báo ở đầu
-    for kw in notify_keywords:
+    # Loại bỏ các keyword thông báo ở đầu (check từ dài đến ngắn)
+    notify_keywords_sorted = sorted(notify_keywords, key=len, reverse=True)
+    for kw in notify_keywords_sorted:
         if message_content.lower().startswith(kw):
             message_content = message_content[len(kw):].strip()
             break
     
-    # Loại bỏ "là" hoặc ":" ở đầu nếu có
-    message_content = re.sub(r'^(là|:)\s*', '', message_content, flags=re.IGNORECASE).strip()
+    # Loại bỏ "là", ":", "này" ở đầu nếu có
+    message_content = re.sub(r'^(là|này|:|\s)+', '', message_content, flags=re.IGNORECASE).strip()
     
     if not message_content:
         return None
@@ -555,7 +590,7 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
                 "• Tình hình booking: \"Cập nhật tình hình booking tháng 12\"\n"
                 "• KPI cá nhân: \"KPI của Mai tháng 12\"\n"
                 "• Gửi báo cáo: \"Gửi báo cáo KPI cho nhóm MKT Team\"\n"
-                "• Thông báo: \"Thông báo [nội dung] vào nhóm MKT Team\"\n"
+                "• Thông báo: \"Gửi tin nhắn này: [nội dung] đến các nhóm đã kết nối\"\n"
                 "• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n"
                 "• Xem notes: \"Tổng hợp note\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
@@ -774,7 +809,7 @@ async def shutdown_event():
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.1.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.2"}
 
 @app.get("/health")
 async def health():
