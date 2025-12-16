@@ -485,14 +485,24 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
     if send_report_result:
         return await handle_send_report_to_group(send_report_result)
     
-    # 0d. Kiểm tra lệnh xem dư nợ TikTok Ads
-    tiktok_keywords = ["số dư tiktok", "so du tiktok", "tiktok ads", "tkqc", "quảng cáo tiktok", 
-                       "balance tiktok", "tiền quảng cáo", "tien quang cao", "số dư ads",
-                       "chi tiêu tiktok", "chi tieu tiktok", "spending tiktok",
-                       "dư nợ tiktok", "du no tiktok", "dư nợ ads", "du no ads"]
-    text_lower = text.lower()
-    if any(kw in text_lower for kw in tiktok_keywords):
-        from tiktok_ads import get_all_balances, format_balance_report
+    # 0d. Kiểm tra lệnh TikTok Ads
+    from tiktok_ads import (
+        is_tiktok_ads_query, is_debt_update_command,
+        parse_debt_command, update_manual_debt,
+        format_debt_update_response, get_all_balances, format_balance_report
+    )
+    
+    # Kiểm tra lệnh cập nhật dư nợ trước
+    if is_debt_update_command(text):
+        amount = parse_debt_command(text)
+        if amount:
+            result = update_manual_debt(amount)
+            return format_debt_update_response(result)
+        else:
+            return "❌ Không nhận được số tiền. Vui lòng nhập theo format:\n`Jarvis dư nợ: 105672606`"
+    
+    # Kiểm tra lệnh xem dư nợ
+    if is_tiktok_ads_query(text):
         result = await get_all_balances()
         return format_balance_report(result)
     
@@ -603,6 +613,7 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
                 "• Gửi báo cáo: \"Gửi báo cáo KPI cho nhóm MKT Team\"\n"
                 "• Thông báo: \"Gửi tin nhắn này: [nội dung] đến các nhóm đã kết nối\"\n"
                 "• Dư nợ TikTok Ads: \"Dư nợ TikTok Ads\" hoặc \"TKQC\"\n"
+                "• Cập nhật dư nợ: \"Jarvis dư nợ: 105672606\"\n"
                 "• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n"
                 "• Xem notes: \"Tổng hợp note\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
@@ -821,7 +832,7 @@ async def shutdown_event():
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.3.6"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.4.0"}
 
 @app.get("/health")
 async def health():
