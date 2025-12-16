@@ -485,6 +485,15 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
     if send_report_result:
         return await handle_send_report_to_group(send_report_result)
     
+    # 0d. Kiểm tra lệnh xem số dư TikTok Ads
+    tiktok_keywords = ["số dư tiktok", "so du tiktok", "tiktok ads", "tkqc", "quảng cáo tiktok", 
+                       "balance tiktok", "tiền quảng cáo", "tien quang cao", "số dư ads"]
+    text_lower = text.lower()
+    if any(kw in text_lower for kw in tiktok_keywords):
+        from tiktok_ads import get_all_balances, format_balance_report
+        result = await get_all_balances()
+        return format_balance_report(result)
+    
     # 1. Phân loại intent
     intent_result = classify_intent(text)
     intent = intent_result.get("intent")
@@ -591,6 +600,7 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
                 "• KPI cá nhân: \"KPI của Mai tháng 12\"\n"
                 "• Gửi báo cáo: \"Gửi báo cáo KPI cho nhóm MKT Team\"\n"
                 "• Thông báo: \"Gửi tin nhắn này: [nội dung] đến các nhóm đã kết nối\"\n"
+                "• Số dư TikTok Ads: \"Số dư TikTok Ads\" hoặc \"TKQC\"\n"
                 "• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n"
                 "• Xem notes: \"Tổng hợp note\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
@@ -809,7 +819,7 @@ async def shutdown_event():
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.2"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.3"}
 
 @app.get("/health")
 async def health():
@@ -1331,6 +1341,94 @@ async def broadcast_report(report_type: str, month: int = None):
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ============ TIKTOK ADS INTEGRATION ============
+
+@app.get("/tiktok/auth")
+async def tiktok_auth():
+    """Redirect đến TikTok authorization page"""
+    from tiktok_ads import get_authorization_url
+    auth_url = get_authorization_url()
+    return {
+        "message": "Vui lòng truy cập URL sau để authorize TikTok Ads",
+        "auth_url": auth_url
+    }
+
+
+@app.get("/tiktok/callback")
+async def tiktok_callback(auth_code: str = None, code: str = None, state: str = None):
+    """
+    Callback từ TikTok OAuth
+    TikTok có thể gửi code hoặc auth_code
+    """
+    from tiktok_ads import exchange_code_for_token, get_stored_advertiser_ids
+    
+    # TikTok gửi 'code' hoặc 'auth_code'
+    the_code = auth_code or code
+    
+    if not the_code:
+        return {
+            "success": False,
+            "error": "Missing auth_code parameter",
+            "received_params": {"auth_code": auth_code, "code": code, "state": state}
+        }
+    
+    print(f"🔐 Received TikTok callback with code: {the_code[:20]}...")
+    
+    result = await exchange_code_for_token(the_code)
+    
+    if result.get("success"):
+        advertiser_ids = result.get("advertiser_ids", [])
+        return {
+            "success": True,
+            "message": "✅ Kết nối TikTok Ads thành công!",
+            "advertiser_count": len(advertiser_ids),
+            "advertiser_ids": advertiser_ids,
+            "next_step": "Bây giờ bạn có thể hỏi Jarvis: 'Số dư TikTok Ads'"
+        }
+    else:
+        return {
+            "success": False,
+            "error": result.get("error"),
+            "code": result.get("code")
+        }
+
+
+@app.get("/tiktok/balance")
+async def tiktok_balance():
+    """Xem số dư tài khoản TikTok Ads"""
+    from tiktok_ads import get_all_balances, format_balance_report
+    
+    result = await get_all_balances()
+    
+    return {
+        "success": result.get("success"),
+        "data": result,
+        "formatted": format_balance_report(result) if result.get("success") else None
+    }
+
+
+@app.get("/tiktok/status")
+async def tiktok_status():
+    """Xem trạng thái kết nối TikTok Ads"""
+    from tiktok_ads import get_stored_token, get_stored_advertiser_ids, get_authorization_url
+    
+    token = get_stored_token()
+    advertiser_ids = get_stored_advertiser_ids()
+    
+    if token:
+        return {
+            "connected": True,
+            "advertiser_count": len(advertiser_ids),
+            "advertiser_ids": advertiser_ids
+        }
+    else:
+        return {
+            "connected": False,
+            "message": "Chưa kết nối TikTok Ads",
+            "auth_url": get_authorization_url()
+        }
 
 
 # ============ RUN ============
