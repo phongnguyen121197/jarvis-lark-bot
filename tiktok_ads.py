@@ -19,6 +19,9 @@ TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI", "https://jarvis-lark-bot-
 # Advertiser ID chính
 PRIMARY_ADVERTISER_ID = os.getenv("TIKTOK_PRIMARY_ADVERTISER_ID", "7089362853240553474")
 
+# Business Center ID (nếu có)
+BC_ID = os.getenv("TIKTOK_BC_ID", "")
+
 # Hạn mức tín dụng (Credit Limit)
 CREDIT_LIMIT = float(os.getenv("TIKTOK_CREDIT_LIMIT", "163646248"))
 
@@ -110,16 +113,14 @@ async def get_advertiser_info(access_token: str, advertiser_id: str) -> Dict[str
         return result
 
 
-async def get_advertiser_balance(access_token: str, advertiser_id: str) -> Dict[str, Any]:
-    """
-    Lấy số dư tài khoản quảng cáo
-    API: GET /advertiser/balance/get/
-    """
+async def get_bc_list(access_token: str) -> Dict[str, Any]:
+    """Lấy danh sách Business Center mà user có quyền"""
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{TIKTOK_API_BASE}/advertiser/balance/get/",
+            f"{TIKTOK_API_BASE}/bc/get/",
             params={
-                "advertiser_id": advertiser_id,
+                "page": 1,
+                "page_size": 10,
             },
             headers={
                 "Access-Token": access_token,
@@ -128,16 +129,46 @@ async def get_advertiser_balance(access_token: str, advertiser_id: str) -> Dict[
         )
         
         result = response.json()
-        print(f"💰 Advertiser balance for {advertiser_id}: {result}")
+        print(f"🏢 BC list: {result}")
+        return result
+
+
+async def get_bc_account_transaction(access_token: str, bc_id: str, advertiser_id: str) -> Dict[str, Any]:
+    """
+    Lấy giao dịch của tài khoản trong BC
+    API: GET /bc/account/transaction/get/
+    """
+    now = datetime.now()
+    start_date = now.replace(day=1).strftime("%Y-%m-%d")
+    end_date = now.strftime("%Y-%m-%d")
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{TIKTOK_API_BASE}/bc/account/transaction/get/",
+            params={
+                "bc_id": bc_id,
+                "advertiser_id": advertiser_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "page": 1,
+                "page_size": 50,
+            },
+            headers={
+                "Access-Token": access_token,
+                "Content-Type": "application/json"
+            }
+        )
+        
+        result = response.json()
+        print(f"💳 BC account transaction: {result}")
         return result
 
 
 async def get_advertiser_transactions(access_token: str, advertiser_id: str) -> Dict[str, Any]:
     """
-    Lấy lịch sử giao dịch
+    Lấy lịch sử giao dịch của advertiser
     API: GET /advertiser/transaction/get/
     """
-    # Lấy từ đầu tháng đến hiện tại
     now = datetime.now()
     start_date = now.replace(day=1).strftime("%Y-%m-%d")
     end_date = now.strftime("%Y-%m-%d")
@@ -150,7 +181,7 @@ async def get_advertiser_transactions(access_token: str, advertiser_id: str) -> 
                 "start_date": start_date,
                 "end_date": end_date,
                 "page": 1,
-                "page_size": 100,
+                "page_size": 50,  # Max 50
             },
             headers={
                 "Access-Token": access_token,
@@ -159,37 +190,13 @@ async def get_advertiser_transactions(access_token: str, advertiser_id: str) -> 
         )
         
         result = response.json()
-        print(f"💳 Advertiser transactions for {advertiser_id}: {result}")
-        return result
-
-
-async def get_bc_account_cost(access_token: str, bc_id: str, advertiser_id: str) -> Dict[str, Any]:
-    """
-    Lấy chi phí tài khoản từ Business Center
-    API: GET /bc/account/cost/get/
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{TIKTOK_API_BASE}/bc/account/cost/get/",
-            params={
-                "bc_id": bc_id,
-                "advertiser_id": advertiser_id,
-            },
-            headers={
-                "Access-Token": access_token,
-                "Content-Type": "application/json"
-            }
-        )
-        
-        result = response.json()
-        print(f"💵 BC account cost for {advertiser_id}: {result}")
+        print(f"💳 Advertiser transactions: {result}")
         return result
 
 
 async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[str, Any]:
     """
     Lấy thông tin chi tiêu của tài khoản
-    Thử nhiều API khác nhau để lấy dữ liệu
     """
     result = {
         "advertiser_id": advertiser_id,
@@ -198,9 +205,6 @@ async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[st
         "status": "Unknown",
         "currency": "VND",
         "spending": 0,
-        "balance": 0,
-        "cash": 0,
-        "grant": 0,
         "credit_limit": CREDIT_LIMIT,
     }
     
@@ -213,44 +217,35 @@ async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[st
             result["name"] = acc.get("name", "Unknown")
             result["status"] = acc.get("status", "Unknown")
             result["currency"] = acc.get("currency", "VND")
-            # Balance từ advertiser/info (có thể là 0 cho postpaid account)
-            result["balance"] = float(acc.get("balance", 0))
             result["success"] = True
     
-    # 2. Lấy balance chi tiết từ /advertiser/balance/get/
-    balance_response = await get_advertiser_balance(access_token, advertiser_id)
-    if balance_response.get("code") == 0:
-        balance_data = balance_response.get("data", {})
-        # Các trường có thể có: cash, grant, transfer_in, transfer_out, total_balance
-        result["cash"] = float(balance_data.get("cash", 0))
-        result["grant"] = float(balance_data.get("grant", 0))
-        result["total_balance"] = float(balance_data.get("total_balance", 0))
+    # 2. Lấy transactions để tính spending
+    tx_response = await get_advertiser_transactions(access_token, advertiser_id)
+    if tx_response.get("code") == 0:
+        transactions = tx_response.get("data", {}).get("list", [])
+        total_spending = 0
         
-        # Với postpaid account, spending có thể nằm trong trường khác
-        # Thử lấy từ các trường liên quan đến chi tiêu
-        result["spending"] = float(balance_data.get("total_cost", 0))
-        if result["spending"] == 0:
-            result["spending"] = float(balance_data.get("cost", 0))
+        print(f"📝 Found {len(transactions)} transactions")
         
-        result["success"] = True
-        print(f"💰 Balance data: {balance_data}")
-    
-    # 3. Nếu chưa có spending, thử tính từ transactions
-    if result["spending"] == 0:
-        tx_response = await get_advertiser_transactions(access_token, advertiser_id)
-        if tx_response.get("code") == 0:
-            transactions = tx_response.get("data", {}).get("list", [])
-            total_cost = 0
-            for tx in transactions:
-                # Tính tổng các giao dịch chi tiêu (cost/deduction)
-                tx_type = tx.get("transaction_type", "")
-                amount = float(tx.get("amount", 0))
-                if "cost" in tx_type.lower() or "deduction" in tx_type.lower():
-                    total_cost += abs(amount)
+        for tx in transactions:
+            amount = float(tx.get("amount", 0))
+            tx_type = tx.get("transaction_type", "")
+            payment_type = tx.get("payment_type", "")
             
-            if total_cost > 0:
-                result["spending"] = total_cost
-                result["success"] = True
+            print(f"   TX: type={tx_type}, payment={payment_type}, amount={amount}")
+            
+            # Tính các giao dịch chi tiêu (amount âm hoặc type là cost/spend)
+            # Với postpaid account, spending thường có amount < 0
+            if amount < 0:
+                total_spending += abs(amount)
+        
+        if total_spending > 0:
+            result["spending"] = total_spending
+        
+        # Nếu không có transaction âm, thử tính từ tổng page_info
+        if result["spending"] == 0:
+            page_info = tx_response.get("data", {}).get("page_info", {})
+            print(f"📊 Page info: {page_info}")
     
     return result
 
@@ -305,8 +300,6 @@ def format_balance_report(balance_data: Dict[str, Any]) -> str:
         currency = acc.get("currency", "VND")
         spending = acc.get("spending", 0)
         credit_limit = acc.get("credit_limit", CREDIT_LIMIT)
-        cash = acc.get("cash", 0)
-        grant = acc.get("grant", 0)
         
         # Tính phần trăm
         percentage = (spending / credit_limit * 100) if credit_limit > 0 else 0
@@ -315,18 +308,9 @@ def format_balance_report(balance_data: Dict[str, Any]) -> str:
         lines.append(f"🆔 ID: `{acc.get('advertiser_id', 'N/A')}`")
         lines.append("")
         
-        # Hiển thị dư nợ theo format yêu cầu
+        # Hiển thị dư nợ
         lines.append(f"💳 **Dư nợ hiện tại: {spending:,.0f} / {credit_limit:,.0f} {currency}**")
         lines.append(f"📊 Tỷ lệ sử dụng: **{percentage:.1f}%**")
-        
-        # Hiển thị thêm thông tin nếu có
-        if cash > 0 or grant > 0:
-            lines.append("")
-            if cash > 0:
-                lines.append(f"💵 Tiền mặt: {cash:,.0f} {currency}")
-            if grant > 0:
-                lines.append(f"🎁 Credit/Grant: {grant:,.0f} {currency}")
-        
         lines.append("")
         
         # Cảnh báo nếu đạt ngưỡng
