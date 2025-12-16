@@ -225,6 +225,74 @@ async def get_bc_account_cost(access_token: str, bc_id: str, advertiser_id: str)
         return result
 
 
+async def get_bc_invoice_unpaid(access_token: str, bc_id: str) -> Dict[str, Any]:
+    """
+    Lấy invoice chưa thanh toán (dư nợ postpaid)
+    API: GET /bc/invoice/unpaid/get/
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{TIKTOK_API_BASE}/bc/invoice/unpaid/get/",
+            params={
+                "bc_id": bc_id,
+            },
+            headers={
+                "Access-Token": access_token,
+                "Content-Type": "application/json"
+            }
+        )
+        
+        result = response.json()
+        print(f"📄 BC invoice unpaid: {result}")
+        return result
+
+
+async def get_bc_billing_group(access_token: str, bc_id: str) -> Dict[str, Any]:
+    """
+    Lấy thông tin billing group
+    API: GET /bc/billing_group/get/
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{TIKTOK_API_BASE}/bc/billing_group/get/",
+            params={
+                "bc_id": bc_id,
+                "page": 1,
+                "page_size": 10,
+            },
+            headers={
+                "Access-Token": access_token,
+                "Content-Type": "application/json"
+            }
+        )
+        
+        result = response.json()
+        print(f"📋 BC billing group: {result}")
+        return result
+
+
+async def get_bc_balance(access_token: str, bc_id: str) -> Dict[str, Any]:
+    """
+    Lấy số dư Business Center
+    API: GET /bc/balance/get/
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{TIKTOK_API_BASE}/bc/balance/get/",
+            params={
+                "bc_id": bc_id,
+            },
+            headers={
+                "Access-Token": access_token,
+                "Content-Type": "application/json"
+            }
+        )
+        
+        result = response.json()
+        print(f"💰 BC balance: {result}")
+        return result
+
+
 async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[str, Any]:
     """
     Lấy thông tin chi tiêu của tài khoản
@@ -252,30 +320,73 @@ async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[st
             result["currency"] = acc.get("currency", "VND")
             result["success"] = True
     
-    # 2. Thử lấy chi phí từ BC account cost API
+    # 2. Thử lấy invoice unpaid (dư nợ chưa thanh toán - postpaid)
     if BC_ID:
+        invoice_response = await get_bc_invoice_unpaid(access_token, BC_ID)
+        if invoice_response.get("code") == 0:
+            invoice_data = invoice_response.get("data", {})
+            print(f"📊 Invoice data: {invoice_data}")
+            
+            # Thử lấy tổng dư nợ từ invoice
+            unpaid_amount = float(invoice_data.get("unpaid_amount", 0))
+            if unpaid_amount == 0:
+                unpaid_amount = float(invoice_data.get("total_unpaid", 0))
+            if unpaid_amount == 0:
+                unpaid_amount = float(invoice_data.get("amount", 0))
+            
+            if unpaid_amount > 0:
+                result["spending"] = unpaid_amount
+                result["success"] = True
+                return result
+    
+    # 3. Thử lấy billing group info
+    if BC_ID and result["spending"] == 0:
+        billing_response = await get_bc_billing_group(access_token, BC_ID)
+        if billing_response.get("code") == 0:
+            billing_data = billing_response.get("data", {})
+            print(f"📊 Billing data: {billing_data}")
+            
+            # Thử lấy spend từ billing groups
+            billing_groups = billing_data.get("list", [])
+            for bg in billing_groups:
+                spend = float(bg.get("current_spend", 0))
+                if spend == 0:
+                    spend = float(bg.get("spend", 0))
+                if spend > 0:
+                    result["spending"] = spend
+                    break
+    
+    # 4. Thử lấy BC balance
+    if BC_ID and result["spending"] == 0:
+        balance_response = await get_bc_balance(access_token, BC_ID)
+        if balance_response.get("code") == 0:
+            balance_data = balance_response.get("data", {})
+            print(f"📊 BC Balance data: {balance_data}")
+            
+            # Thử lấy từ balance data
+            cost = float(balance_data.get("cost", 0))
+            if cost > 0:
+                result["spending"] = cost
+    
+    # 5. Thử lấy chi phí từ BC account cost API
+    if BC_ID and result["spending"] == 0:
         cost_response = await get_bc_account_cost(access_token, BC_ID, advertiser_id)
         if cost_response.get("code") == 0:
             cost_data = cost_response.get("data", {})
             print(f"📊 Cost data: {cost_data}")
             
-            # Lấy các field có thể chứa chi phí
-            spending = float(cost_data.get("cost", 0))
-            if spending == 0:
-                spending = float(cost_data.get("total_cost", 0))
-            if spending == 0:
-                spending = float(cost_data.get("spend", 0))
-            
-            if spending > 0:
-                result["spending"] = spending
-                result["success"] = True
-                return result
+            # Lấy từ cost_list
+            cost_list = cost_data.get("cost_list", [])
+            for item in cost_list:
+                spend = float(item.get("cost", 0))
+                if spend > 0:
+                    result["spending"] += spend
     
-    # 3. Thử lấy transactions nếu chưa có spending
+    # 6. Thử lấy transactions
     if result["spending"] == 0 and BC_ID:
         tx_response = await get_advertiser_transactions(access_token, advertiser_id, BC_ID)
         if tx_response.get("code") == 0:
-            transactions = tx_response.get("data", {}).get("list", [])
+            transactions = tx_response.get("data", {}).get("transaction_list", [])
             total_spending = 0
             
             print(f"📝 Found {len(transactions)} transactions")
@@ -286,18 +397,17 @@ async def get_account_spending(access_token: str, advertiser_id: str) -> Dict[st
                 
                 print(f"   TX: type={tx_type}, amount={amount}")
                 
-                # Tính các giao dịch chi tiêu
                 if amount < 0:
                     total_spending += abs(amount)
             
             if total_spending > 0:
                 result["spending"] = total_spending
     
-    # 4. Thử lấy BC account transaction nếu vẫn chưa có
+    # 7. BC account transaction
     if result["spending"] == 0 and BC_ID:
         bc_tx_response = await get_bc_account_transaction(access_token, BC_ID, advertiser_id)
         if bc_tx_response.get("code") == 0:
-            transactions = bc_tx_response.get("data", {}).get("list", [])
+            transactions = bc_tx_response.get("data", {}).get("transaction_list", [])
             total_spending = 0
             
             print(f"📝 Found {len(transactions)} BC transactions")
