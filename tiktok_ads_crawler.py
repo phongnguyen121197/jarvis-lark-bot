@@ -247,17 +247,15 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
             
             # Parse spending data - multiple patterns
             # TikTok shows: "Spending so far for current billing cycle 105,672,606 VND"
+            # Nhưng có HTML tags giữa số và VND: 105,672,606</span>VND
             spending_patterns = [
-                # Pattern chính xác như trong hình
-                r'Spending\s+so\s+far\s+for\s+current\s+billing\s+cycle\s*([\d,]+)\s*VND',
-                # Pattern ngắn hơn
-                r'current\s+billing\s+cycle\s*([\d,]+)\s*VND',
-                # Pattern với HTML tags
-                r'billing\s+cycle[^>]*>?\s*([\d,]+)\s*VND',
-                # Pattern tìm số lớn trước VND (100M+ range)
-                r'(\d{3},\d{3},\d{3})\s*VND',
-                # Pattern tìm số lớn (10M+ range)  
-                r'(\d{2,3},\d{3},\d{3})\s*VND',
+                # Pattern với HTML tags giữa số và VND
+                r'Spending\s+so\s+far\s+for\s+current\s+billing\s+cycle[^0-9]*([\d,]+)',
+                r'current\s+billing\s+cycle[^0-9]*([\d,]+)',
+                # Pattern với </span> trước VND
+                r'([\d,]+)(?:</span>|<[^>]*>)*\s*VND',
+                # Pattern đơn giản - số lớn
+                r'(\d{2,3},\d{3},\d{3})',
             ]
             
             found_spending = False
@@ -281,65 +279,87 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                         print(f"⚠️ ValueError: {e}")
                         continue
             
-            # Fallback: tìm tất cả số VND và log ra
+            # Fallback: tìm spending và credit limit riêng biệt
             if not found_spending:
-                print("⚠️ Could not find spending with patterns, trying fallback...")
+                print("⚠️ Could not find spending with patterns, trying smart fallback...")
                 
-                # Tìm context xung quanh "Spending" hoặc "billing"
-                context_match = re.search(r'(.{0,50}[Ss]pending.{0,100})', content)
-                if context_match:
-                    print(f"📍 Spending context: {context_match.group(1)[:100]}")
-                
-                # Tìm tất cả số có format XXX,XXX,XXX VND
-                all_vnd = re.findall(r'([\d,\.]+)\s*VND', content)
-                large_numbers = []
-                for num_str in all_vnd:
-                    clean = num_str.replace(',', '').replace('.', '')
+                # 1. Tìm Credit Limit: "spending reaches XXX" hoặc "Or when ad spending reaches XXX"
+                credit_match = re.search(r'spending\s+reaches[^0-9]*([\d,]+)', content, re.IGNORECASE)
+                if credit_match:
+                    limit_str = credit_match.group(1).replace(',', '')
                     try:
-                        num = float(clean)
-                        if num > 1000000:
-                            large_numbers.append((num_str, num))
+                        result["credit_limit"] = float(limit_str)
+                        print(f"✅ Found credit limit: {result['credit_limit']:,.0f}")
                     except:
                         pass
                 
-                print(f"📊 Found {len(large_numbers)} large VND numbers: {large_numbers[:5]}")
-                
-                # Lấy số thứ 2 (số đầu thường là credit limit)
-                if len(large_numbers) >= 2:
-                    # Credit limit thường lớn hơn spending
-                    sorted_nums = sorted(large_numbers, key=lambda x: x[1], reverse=True)
-                    # Số lớn nhất = credit limit, số thứ 2 = spending
-                    if len(sorted_nums) >= 2:
-                        result["spending"] = sorted_nums[1][1]
-                        result["credit_limit"] = sorted_nums[0][1]
+                # 2. Tìm Spending: "Spending so far for current billing cycle XXX"
+                spending_match = re.search(r'Spending\s+so\s+far[^0-9]*([\d,]+)', content, re.IGNORECASE)
+                if spending_match:
+                    spending_str = spending_match.group(1).replace(',', '')
+                    try:
+                        result["spending"] = float(spending_str)
                         result["success"] = True
                         found_spending = True
-                        print(f"✅ Fallback found: spending={sorted_nums[1][1]:,.0f}, limit={sorted_nums[0][1]:,.0f}")
+                        print(f"✅ Found spending: {result['spending']:,.0f}")
+                    except:
+                        pass
+                
+                # 3. Nếu vẫn không tìm được, thử tìm tất cả số lớn
+                if not found_spending:
+                    print("⚠️ Smart fallback failed, trying number scan...")
+                    
+                    # Tìm tất cả số có format XXX,XXX,XXX
+                    all_large = re.findall(r'(\d{2,3},\d{3},\d{3})', content)
+                    large_numbers = []
+                    seen = set()
+                    for num_str in all_large:
+                        if num_str not in seen:
+                            seen.add(num_str)
+                            clean = num_str.replace(',', '')
+                            try:
+                                num = float(clean)
+                                if num > 1000000:
+                                    large_numbers.append((num_str, num))
+                            except:
+                                pass
+                    
+                    print(f"📊 Found {len(large_numbers)} unique large numbers: {large_numbers[:5]}")
+                    
+                    # Nếu có ít nhất 2 số, số lớn nhất = credit limit, số nhỏ hơn = spending
+                    if len(large_numbers) >= 2:
+                        sorted_nums = sorted(large_numbers, key=lambda x: x[1], reverse=True)
+                        result["credit_limit"] = sorted_nums[0][1]
+                        result["spending"] = sorted_nums[1][1]
+                        result["success"] = True
+                        found_spending = True
+                        print(f"✅ Number scan: spending={sorted_nums[1][1]:,.0f}, limit={sorted_nums[0][1]:,.0f}")
                 
                 # Save content for debugging
                 with open('/tmp/tiktok_ads_content.html', 'w', encoding='utf-8') as f:
                     f.write(content)
                 print("📝 Saved page content to /tmp/tiktok_ads_content.html")
             
-            # Parse credit limit
-            limit_patterns = [
-                r'spending\s+reaches\s*([\d,\.]+)\s*VND',
-                r'hạn\s+mức.*?([\d,\.]+)\s*VND',
-                r'Or\s+when.*?([\d,\.]+)\s*VND',
-            ]
-            
-            for pattern in limit_patterns:
-                match = re.search(pattern, content, re.IGNORECASE)
-                if match:
-                    limit_str = match.group(1).replace(',', '').replace('.', '')
-                    try:
-                        limit = float(limit_str)
-                        if limit > 100000000:  # > 100M VND
-                            result["credit_limit"] = limit
-                            print(f"✅ Found credit limit: {result['credit_limit']:,.0f} VND")
-                            break
-                    except ValueError:
-                        continue
+            # Parse credit limit (nếu chưa có từ fallback)
+            if result.get("credit_limit", 0) == CREDIT_LIMIT:
+                limit_patterns = [
+                    r'spending\s+reaches[^0-9]*([\d,]+)',
+                    r'Or\s+when\s+ad\s+spending\s+reaches[^0-9]*([\d,]+)',
+                    r'hạn\s+mức[^0-9]*([\d,]+)',
+                ]
+                
+                for pattern in limit_patterns:
+                    match = re.search(pattern, content, re.IGNORECASE)
+                    if match:
+                        limit_str = match.group(1).replace(',', '')
+                        try:
+                            limit = float(limit_str)
+                            if limit > 100000000:  # > 100M VND
+                                result["credit_limit"] = limit
+                                print(f"✅ Found credit limit: {result['credit_limit']:,.0f} VND")
+                                break
+                        except ValueError:
+                            continue
             
             # Parse next billing date
             date_patterns = [

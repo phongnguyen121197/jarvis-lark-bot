@@ -836,20 +836,34 @@ async def tiktok_debug():
             with open("/tmp/tiktok_ads_content.html", 'r', encoding='utf-8') as f:
                 content = f.read()
                 result["html_length"] = len(content)
-                # Tìm các số có format X,XXX,XXX VND
+                
                 import re
-                vnd_numbers = re.findall(r'(\d{1,3}(?:,\d{3})+)\s*VND', content)
-                result["vnd_numbers_found"] = vnd_numbers[:10]  # Show first 10
                 
-                # Tìm "Spending so far" context
-                spending_match = re.search(r'.{0,100}[Ss]pending.{0,200}', content)
+                # Tìm các số có format X,XXX,XXX (có thể có HTML tags trước VND)
+                # Pattern: số + optional HTML tags + VND
+                vnd_pattern = r'([\d,]+)(?:</span>|<[^>]*>)*\s*VND'
+                vnd_numbers = re.findall(vnd_pattern, content)
+                result["vnd_numbers_found"] = vnd_numbers[:10]
+                
+                # Tìm "spending reaches" context (credit limit)
+                limit_match = re.search(r'spending reaches[^>]*>?\s*([\d,]+)', content)
+                if limit_match:
+                    result["credit_limit_found"] = limit_match.group(1)
+                
+                # Tìm "Spending so far" context (actual spending)
+                spending_match = re.search(r'Spending so far[^>]*>?\s*([\d,]+)', content)
                 if spending_match:
-                    result["spending_context"] = spending_match.group(0)
+                    result["spending_found"] = spending_match.group(1)
                 
-                # Tìm "billing cycle" context  
-                billing_match = re.search(r'.{0,100}billing.{0,200}', content, re.IGNORECASE)
+                # Tìm "billing cycle" với số
+                billing_match = re.search(r'billing\s+cycle[^0-9]*?([\d,]+)', content, re.IGNORECASE)
                 if billing_match:
-                    result["billing_context"] = billing_match.group(0)
+                    result["billing_cycle_number"] = billing_match.group(1)
+                
+                # Raw context around key phrases
+                ctx1 = re.search(r'.{0,50}[Ss]pending.{0,150}', content)
+                if ctx1:
+                    result["spending_raw_context"] = ctx1.group(0)[:200]
                     
         except Exception as e:
             result["error"] = str(e)
@@ -859,7 +873,7 @@ async def tiktok_debug():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.3"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.4"}
 
 @app.get("/health")
 async def health():
