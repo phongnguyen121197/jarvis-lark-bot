@@ -839,31 +839,31 @@ async def tiktok_debug():
                 
                 import re
                 
-                # Tìm các số có format X,XXX,XXX (có thể có HTML tags trước VND)
-                # Pattern: số + optional HTML tags + VND
-                vnd_pattern = r'([\d,]+)(?:</span>|<[^>]*>)*\s*VND'
-                vnd_numbers = re.findall(vnd_pattern, content)
-                result["vnd_numbers_found"] = vnd_numbers[:10]
-                
-                # Tìm "spending reaches" context (credit limit)
-                limit_match = re.search(r'spending reaches[^>]*>?\s*([\d,]+)', content)
-                if limit_match:
-                    result["credit_limit_found"] = limit_match.group(1)
-                
-                # Tìm "Spending so far" context (actual spending)
-                spending_match = re.search(r'Spending so far[^>]*>?\s*([\d,]+)', content)
+                # Tìm spending: số trong <span> sau "Spending so far"
+                spending_match = re.search(
+                    r'Spending\s+so\s+far[^<]*<span[^>]*>([\d,]+)</span>',
+                    content, re.IGNORECASE | re.DOTALL
+                )
                 if spending_match:
                     result["spending_found"] = spending_match.group(1)
                 
-                # Tìm "billing cycle" với số
-                billing_match = re.search(r'billing\s+cycle[^0-9]*?([\d,]+)', content, re.IGNORECASE)
-                if billing_match:
-                    result["billing_cycle_number"] = billing_match.group(1)
+                # Tìm credit limit: số sau "spending reaches"
+                credit_match = re.search(
+                    r'spending\s+reaches[^0-9]*([\d,]+)',
+                    content, re.IGNORECASE
+                )
+                if credit_match:
+                    result["credit_limit_found"] = credit_match.group(1)
                 
-                # Raw context around key phrases
-                ctx1 = re.search(r'.{0,50}[Ss]pending.{0,150}', content)
-                if ctx1:
-                    result["spending_raw_context"] = ctx1.group(0)[:200]
+                # Tìm tất cả số lớn trong <span> tags
+                span_numbers = re.findall(r'<span[^>]*>([\d,]+)</span>', content)
+                large_span_nums = [n for n in span_numbers if ',' in n and len(n) > 5]
+                result["span_numbers"] = large_span_nums[:10]
+                
+                # Raw context around "Spending so far"
+                ctx = re.search(r'.{0,30}Spending\s+so\s+far.{0,100}', content, re.IGNORECASE)
+                if ctx:
+                    result["spending_context"] = ctx.group(0)
                     
         except Exception as e:
             result["error"] = str(e)
@@ -873,7 +873,7 @@ async def tiktok_debug():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.4"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.5"}
 
 @app.get("/health")
 async def health():

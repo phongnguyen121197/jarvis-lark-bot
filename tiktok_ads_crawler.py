@@ -246,16 +246,14 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
             print(f"📝 Page content length: {len(content)} chars")
             
             # Parse spending data - multiple patterns
-            # TikTok shows: "Spending so far for current billing cycle 105,672,606 VND"
-            # Nhưng có HTML tags giữa số và VND: 105,672,606</span>VND
+            # HTML structure: "Spending so far..." <span>129,265,101</span> "VND"
             spending_patterns = [
-                # Pattern với HTML tags giữa số và VND
-                r'Spending\s+so\s+far\s+for\s+current\s+billing\s+cycle[^0-9]*([\d,]+)',
-                r'current\s+billing\s+cycle[^0-9]*([\d,]+)',
-                # Pattern với </span> trước VND
-                r'([\d,]+)(?:</span>|<[^>]*>)*\s*VND',
-                # Pattern đơn giản - số lớn
-                r'(\d{2,3},\d{3},\d{3})',
+                # Pattern cho số trong <span> tag sau "Spending so far"
+                r'Spending\s+so\s+far[^<]*<span[^>]*>([\d,]+)</span>',
+                # Pattern cho số sau "current billing cycle"
+                r'current\s+billing\s+cycle[^<]*<span[^>]*>([\d,]+)</span>',
+                # Pattern đơn giản - số trong span
+                r'billing\s+cycle[^<]*<span[^>]*>([\d,]+)</span>',
             ]
             
             found_spending = False
@@ -283,8 +281,32 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
             if not found_spending:
                 print("⚠️ Could not find spending with patterns, trying smart fallback...")
                 
-                # 1. Tìm Credit Limit: "spending reaches XXX" hoặc "Or when ad spending reaches XXX"
-                credit_match = re.search(r'spending\s+reaches[^0-9]*([\d,]+)', content, re.IGNORECASE)
+                # 1. Tìm Spending: số trong <span> sau "Spending so far"
+                spending_match = re.search(
+                    r'Spending\s+so\s+far[^<]*<span[^>]*>([\d,]+)</span>',
+                    content, re.IGNORECASE | re.DOTALL
+                )
+                if spending_match:
+                    spending_str = spending_match.group(1).replace(',', '')
+                    try:
+                        result["spending"] = float(spending_str)
+                        result["success"] = True
+                        found_spending = True
+                        print(f"✅ Found spending in span: {result['spending']:,.0f}")
+                    except:
+                        pass
+                
+                # 2. Tìm Credit Limit: số trong <span> sau "spending reaches"
+                credit_match = re.search(
+                    r'spending\s+reaches[^<]*<span[^>]*>([\d,]+)</span>',
+                    content, re.IGNORECASE | re.DOTALL
+                )
+                if not credit_match:
+                    # Try simpler pattern
+                    credit_match = re.search(
+                        r'spending\s+reaches[^0-9]*([\d,]+)',
+                        content, re.IGNORECASE
+                    )
                 if credit_match:
                     limit_str = credit_match.group(1).replace(',', '')
                     try:
@@ -293,28 +315,16 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                     except:
                         pass
                 
-                # 2. Tìm Spending: "Spending so far for current billing cycle XXX"
-                spending_match = re.search(r'Spending\s+so\s+far[^0-9]*([\d,]+)', content, re.IGNORECASE)
-                if spending_match:
-                    spending_str = spending_match.group(1).replace(',', '')
-                    try:
-                        result["spending"] = float(spending_str)
-                        result["success"] = True
-                        found_spending = True
-                        print(f"✅ Found spending: {result['spending']:,.0f}")
-                    except:
-                        pass
-                
-                # 3. Nếu vẫn không tìm được, thử tìm tất cả số lớn
+                # 3. Nếu vẫn không tìm được spending, thử tìm tất cả số trong <span> tags
                 if not found_spending:
-                    print("⚠️ Smart fallback failed, trying number scan...")
+                    print("⚠️ Smart fallback failed, trying span number scan...")
                     
-                    # Tìm tất cả số có format XXX,XXX,XXX
-                    all_large = re.findall(r'(\d{2,3},\d{3},\d{3})', content)
+                    # Tìm tất cả số trong <span> tags
+                    span_numbers = re.findall(r'<span[^>]*>([\d,]+)</span>', content)
                     large_numbers = []
                     seen = set()
-                    for num_str in all_large:
-                        if num_str not in seen:
+                    for num_str in span_numbers:
+                        if num_str not in seen and ',' in num_str:  # Chỉ lấy số có comma (lớn)
                             seen.add(num_str)
                             clean = num_str.replace(',', '')
                             try:
@@ -324,7 +334,7 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                             except:
                                 pass
                     
-                    print(f"📊 Found {len(large_numbers)} unique large numbers: {large_numbers[:5]}")
+                    print(f"📊 Found {len(large_numbers)} numbers in span: {large_numbers[:5]}")
                     
                     # Nếu có ít nhất 2 số, số lớn nhất = credit limit, số nhỏ hơn = spending
                     if len(large_numbers) >= 2:
@@ -333,7 +343,7 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                         result["spending"] = sorted_nums[1][1]
                         result["success"] = True
                         found_spending = True
-                        print(f"✅ Number scan: spending={sorted_nums[1][1]:,.0f}, limit={sorted_nums[0][1]:,.0f}")
+                        print(f"✅ Span scan: spending={sorted_nums[1][1]:,.0f}, limit={sorted_nums[0][1]:,.0f}")
                 
                 # Save content for debugging
                 with open('/tmp/tiktok_ads_content.html', 'w', encoding='utf-8') as f:
@@ -343,13 +353,14 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
             # Parse credit limit (nếu chưa có từ fallback)
             if result.get("credit_limit", 0) == CREDIT_LIMIT:
                 limit_patterns = [
+                    # Pattern cho số trong span sau "spending reaches"
+                    r'spending\s+reaches[^<]*<span[^>]*>([\d,]+)</span>',
                     r'spending\s+reaches[^0-9]*([\d,]+)',
                     r'Or\s+when\s+ad\s+spending\s+reaches[^0-9]*([\d,]+)',
-                    r'hạn\s+mức[^0-9]*([\d,]+)',
                 ]
                 
                 for pattern in limit_patterns:
-                    match = re.search(pattern, content, re.IGNORECASE)
+                    match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
                     if match:
                         limit_str = match.group(1).replace(',', '')
                         try:
