@@ -486,25 +486,13 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
         return await handle_send_report_to_group(send_report_result)
     
     # 0d. Kiểm tra lệnh TikTok Ads
-    from tiktok_ads import (
-        is_tiktok_ads_query, is_debt_update_command,
-        parse_debt_command, update_manual_debt,
-        format_debt_update_response, get_all_balances, format_balance_report
-    )
+    from tiktok_ads_crawler import is_tiktok_ads_query, get_spending_data, format_spending_report
     
-    # Kiểm tra lệnh cập nhật dư nợ trước
-    if is_debt_update_command(text):
-        amount = parse_debt_command(text)
-        if amount:
-            result = update_manual_debt(amount)
-            return format_debt_update_response(result)
-        else:
-            return "❌ Không nhận được số tiền. Vui lòng nhập theo format:\n`Jarvis dư nợ: 105672606`"
-    
-    # Kiểm tra lệnh xem dư nợ
     if is_tiktok_ads_query(text):
-        result = await get_all_balances()
-        return format_balance_report(result)
+        # Check if force refresh requested
+        force_refresh = any(kw in text.lower() for kw in ['refresh', 'làm mới', 'lam moi', 'update', 'cập nhật'])
+        result = await get_spending_data(force_refresh=force_refresh)
+        return format_spending_report(result)
     
     # 1. Phân loại intent
     intent_result = classify_intent(text)
@@ -613,7 +601,7 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
                 "• Gửi báo cáo: \"Gửi báo cáo KPI cho nhóm MKT Team\"\n"
                 "• Thông báo: \"Gửi tin nhắn này: [nội dung] đến các nhóm đã kết nối\"\n"
                 "• Dư nợ TikTok Ads: \"Dư nợ TikTok Ads\" hoặc \"TKQC\"\n"
-                "• Cập nhật dư nợ: \"Jarvis dư nợ: 105672606\"\n"
+                "• Làm mới data: \"TKQC refresh\"\n"
                 "• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n"
                 "• Xem notes: \"Tổng hợp note\"\n"
                 "• Hỏi GPT: \"GPT: câu hỏi bất kỳ\"\n\n"
@@ -832,7 +820,7 @@ async def shutdown_event():
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.4.0"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.0"}
 
 @app.get("/health")
 async def health():
