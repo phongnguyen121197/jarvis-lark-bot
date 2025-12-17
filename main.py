@@ -58,6 +58,11 @@ GROUP_CHATS = {
     "mkt_team": "oc_768c8b7b8680299e36fe889de677578a",           # Kalle - MKT Team
 }
 
+# TikTok Ads Alert Config
+TIKTOK_ALERT_CHAT_ID = os.getenv("TIKTOK_ALERT_CHAT_ID", GROUP_CHATS.get("digital", ""))
+TIKTOK_REPORT_DAYS = int(os.getenv("TIKTOK_REPORT_DAYS", "3"))  # Báo cáo mỗi X ngày
+TIKTOK_REPORT_HOUR = int(os.getenv("TIKTOK_REPORT_HOUR", "9"))  # Giờ gửi báo cáo
+
 # Danh sách nhóm đã nhận tin nhắn (auto-collect từ events)
 _discovered_groups = {}
 
@@ -488,6 +493,14 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
     # 0d. Kiểm tra lệnh TikTok Ads
     from tiktok_ads_crawler import is_tiktok_ads_query, get_spending_data, format_spending_report
     
+    # Kiểm tra lệnh gửi báo cáo TKQC vào nhóm
+    if any(kw in text.lower() for kw in ['gửi báo cáo tkqc', 'gui bao cao tkqc', 'tkqc report', 'báo cáo tkqc digital']):
+        if TIKTOK_ALERT_CHAT_ID:
+            await send_tiktok_ads_scheduled_report()
+            return "✅ Đã gửi báo cáo TikTok Ads vào nhóm Digital!"
+        else:
+            return "❌ Chưa cấu hình nhóm nhận báo cáo TikTok Ads"
+    
     if is_tiktok_ads_query(text):
         # Check if force refresh requested
         force_refresh = any(kw in text.lower() for kw in ['refresh', 'làm mới', 'lam moi', 'update', 'cập nhật'])
@@ -787,6 +800,50 @@ async def check_and_send_reminders():
     return reminders_sent
 
 
+# ============ TIKTOK ADS SCHEDULED REPORT ============
+
+async def send_tiktok_ads_scheduled_report():
+    """Gửi báo cáo TikTok Ads định kỳ vào nhóm Digital"""
+    if not TIKTOK_ALERT_CHAT_ID:
+        print("⚠️ TIKTOK_ALERT_CHAT_ID not configured, skipping scheduled report")
+        return
+    
+    print(f"📊 Running scheduled TikTok Ads report to {TIKTOK_ALERT_CHAT_ID}...")
+    
+    try:
+        from tiktok_ads_crawler import get_spending_data, format_spending_report, check_warning_threshold
+        
+        # Force refresh để lấy data mới nhất
+        result = await get_spending_data(force_refresh=True)
+        
+        if result.get("success"):
+            report = format_spending_report(result)
+            
+            # Thêm header cho scheduled report
+            header = f"📅 **BÁO CÁO ĐỊNH KỲ** (mỗi {TIKTOK_REPORT_DAYS} ngày)\n\n"
+            report = header + report
+            
+            # Gửi vào nhóm Digital
+            await send_message(TIKTOK_ALERT_CHAT_ID, report)
+            print(f"✅ Sent TikTok Ads report to Digital group")
+            
+            # Kiểm tra warning threshold
+            warning = check_warning_threshold()
+            if warning:
+                # Gửi warning riêng với mention
+                await send_message(TIKTOK_ALERT_CHAT_ID, warning)
+                print("⚠️ Warning threshold reached, sent alert")
+        else:
+            error_msg = f"❌ **Lỗi báo cáo TikTok Ads**\n\n{result.get('error', 'Unknown error')}\n\n💡 Vui lòng kiểm tra cookies hoặc kết nối."
+            await send_message(TIKTOK_ALERT_CHAT_ID, error_msg)
+            print(f"❌ TikTok Ads report failed: {result.get('error')}")
+            
+    except Exception as e:
+        print(f"❌ Scheduled TikTok report error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 @app.on_event("startup")
 async def startup_event():
     """Khởi động scheduler khi app start"""
@@ -805,6 +862,17 @@ async def startup_event():
         id="periodic_reminder",
         replace_existing=True
     )
+    
+    # TikTok Ads report mỗi X ngày (default: 3 ngày)
+    if TIKTOK_ALERT_CHAT_ID:
+        from apscheduler.triggers.interval import IntervalTrigger
+        scheduler.add_job(
+            send_tiktok_ads_scheduled_report,
+            IntervalTrigger(days=TIKTOK_REPORT_DAYS, timezone=TIMEZONE),
+            id="tiktok_ads_report",
+            replace_existing=True
+        )
+        print(f"📊 TikTok Ads report scheduled every {TIKTOK_REPORT_DAYS} days to Digital group")
     
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
@@ -873,7 +941,7 @@ async def tiktok_debug():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.5"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.6"}
 
 @app.get("/health")
 async def health():
