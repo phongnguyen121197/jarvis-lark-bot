@@ -211,7 +211,6 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                 print(f"📄 Page loaded: {page.url}")
             except PlaywrightTimeout:
                 print("⏱️ Timeout waiting for networkidle, continuing...")
-                await page.wait_for_timeout(5000)
             
             # Check if redirected to login
             current_url = page.url
@@ -222,12 +221,21 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                 await browser.close()
                 return result
             
-            # Wait for content to load
-            await page.wait_for_timeout(5000)
+            # Wait for content to load - try to find spending text
+            try:
+                await page.wait_for_selector('text=Spending so far', timeout=10000)
+                print("✅ Found 'Spending so far' text")
+            except:
+                print("⚠️ 'Spending so far' text not found, waiting longer...")
+                await page.wait_for_timeout(5000)
+            
+            # Scroll down to trigger lazy loading
+            await page.evaluate('window.scrollTo(0, document.body.scrollHeight / 2)')
+            await page.wait_for_timeout(2000)
             
             # Take screenshot for debugging
             try:
-                await page.screenshot(path='/tmp/tiktok_ads_page.png')
+                await page.screenshot(path='/tmp/tiktok_ads_page.png', full_page=True)
                 print("📸 Screenshot saved to /tmp/tiktok_ads_page.png")
             except:
                 pass
@@ -237,15 +245,19 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
             
             print(f"📝 Page content length: {len(content)} chars")
             
-            # Parse spending data
-            # Pattern 1: "Spending so far for current billing cycle 105,672,606 VND"
-            # Pattern 2: HTML structure with specific classes
+            # Parse spending data - multiple patterns
+            # TikTok shows: "Spending so far for current billing cycle 105,672,606 VND"
             spending_patterns = [
-                r'Spending\s+so\s+far\s+for\s+current\s+billing\s+cycle\s*([\d,\.]+)\s*VND',
-                r'current\s+billing\s+cycle[:\s]*([\d,\.]+)\s*VND',
-                r'Chi\s+tiêu.*?billing.*?([\d,\.]+)\s*VND',
-                r'billing.*?([\d,\.]+)\s*VND',
-                r'(\d{2,3}[,\.]\d{3}[,\.]\d{3})\s*VND'  # Match any large number with VND
+                # Pattern chính xác như trong hình
+                r'Spending\s+so\s+far\s+for\s+current\s+billing\s+cycle\s*([\d,]+)\s*VND',
+                # Pattern ngắn hơn
+                r'current\s+billing\s+cycle\s*([\d,]+)\s*VND',
+                # Pattern với HTML tags
+                r'billing\s+cycle[^>]*>?\s*([\d,]+)\s*VND',
+                # Pattern tìm số lớn trước VND (100M+ range)
+                r'(\d{3},\d{3},\d{3})\s*VND',
+                # Pattern tìm số lớn (10M+ range)  
+                r'(\d{2,3},\d{3},\d{3})\s*VND',
             ]
             
             found_spending = False
@@ -253,6 +265,7 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                 match = re.search(pattern, content, re.IGNORECASE)
                 if match:
                     spending_str = match.group(1).replace(',', '').replace('.', '')
+                    print(f"🔎 Pattern matched: {pattern[:40]}... → raw: {match.group(1)} → clean: {spending_str}")
                     try:
                         spending = float(spending_str)
                         # Sanity check: số phải > 1 triệu (1,000,000)
@@ -260,13 +273,49 @@ async def crawl_spending_data(advertiser_id: str = None) -> Dict[str, Any]:
                             result["spending"] = spending
                             result["success"] = True
                             found_spending = True
-                            print(f"✅ Found spending: {result['spending']:,.0f} VND (pattern: {pattern[:30]}...)")
+                            print(f"✅ Found spending: {result['spending']:,.0f} VND")
                             break
-                    except ValueError:
+                        else:
+                            print(f"⚠️ Spending too small: {spending}")
+                    except ValueError as e:
+                        print(f"⚠️ ValueError: {e}")
                         continue
             
+            # Fallback: tìm tất cả số VND và log ra
             if not found_spending:
-                print("⚠️ Could not find spending in page content")
+                print("⚠️ Could not find spending with patterns, trying fallback...")
+                
+                # Tìm context xung quanh "Spending" hoặc "billing"
+                context_match = re.search(r'(.{0,50}[Ss]pending.{0,100})', content)
+                if context_match:
+                    print(f"📍 Spending context: {context_match.group(1)[:100]}")
+                
+                # Tìm tất cả số có format XXX,XXX,XXX VND
+                all_vnd = re.findall(r'([\d,\.]+)\s*VND', content)
+                large_numbers = []
+                for num_str in all_vnd:
+                    clean = num_str.replace(',', '').replace('.', '')
+                    try:
+                        num = float(clean)
+                        if num > 1000000:
+                            large_numbers.append((num_str, num))
+                    except:
+                        pass
+                
+                print(f"📊 Found {len(large_numbers)} large VND numbers: {large_numbers[:5]}")
+                
+                # Lấy số thứ 2 (số đầu thường là credit limit)
+                if len(large_numbers) >= 2:
+                    # Credit limit thường lớn hơn spending
+                    sorted_nums = sorted(large_numbers, key=lambda x: x[1], reverse=True)
+                    # Số lớn nhất = credit limit, số thứ 2 = spending
+                    if len(sorted_nums) >= 2:
+                        result["spending"] = sorted_nums[1][1]
+                        result["credit_limit"] = sorted_nums[0][1]
+                        result["success"] = True
+                        found_spending = True
+                        print(f"✅ Fallback found: spending={sorted_nums[1][1]:,.0f}, limit={sorted_nums[0][1]:,.0f}")
+                
                 # Save content for debugging
                 with open('/tmp/tiktok_ads_content.html', 'w', encoding='utf-8') as f:
                     f.write(content)

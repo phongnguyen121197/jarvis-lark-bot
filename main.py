@@ -818,9 +818,48 @@ async def shutdown_event():
 
 
 # ============ HEALTH & TEST ============
+@app.get("/tiktok/debug")
+async def tiktok_debug():
+    """Debug endpoint để xem TikTok Ads page content"""
+    import os
+    
+    result = {
+        "html_file": "/tmp/tiktok_ads_content.html",
+        "html_exists": os.path.exists("/tmp/tiktok_ads_content.html"),
+        "screenshot_file": "/tmp/tiktok_ads_page.png", 
+        "screenshot_exists": os.path.exists("/tmp/tiktok_ads_page.png"),
+    }
+    
+    # Read HTML content
+    if result["html_exists"]:
+        try:
+            with open("/tmp/tiktok_ads_content.html", 'r', encoding='utf-8') as f:
+                content = f.read()
+                result["html_length"] = len(content)
+                # Tìm các số có format X,XXX,XXX VND
+                import re
+                vnd_numbers = re.findall(r'(\d{1,3}(?:,\d{3})+)\s*VND', content)
+                result["vnd_numbers_found"] = vnd_numbers[:10]  # Show first 10
+                
+                # Tìm "Spending so far" context
+                spending_match = re.search(r'.{0,100}[Ss]pending.{0,200}', content)
+                if spending_match:
+                    result["spending_context"] = spending_match.group(0)
+                
+                # Tìm "billing cycle" context  
+                billing_match = re.search(r'.{0,100}billing.{0,200}', content, re.IGNORECASE)
+                if billing_match:
+                    result["billing_context"] = billing_match.group(0)
+                    
+        except Exception as e:
+            result["error"] = str(e)
+    
+    return result
+
+
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.2"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.3"}
 
 @app.get("/health")
 async def health():
