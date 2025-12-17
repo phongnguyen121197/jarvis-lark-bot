@@ -820,7 +820,7 @@ async def shutdown_event():
 # ============ HEALTH & TEST ============
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.1"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.5.2"}
 
 @app.get("/health")
 async def health():

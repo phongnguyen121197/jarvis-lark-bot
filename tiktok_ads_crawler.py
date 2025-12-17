@@ -42,28 +42,90 @@ def save_cookies(cookies: list):
 
 def load_cookies() -> Optional[list]:
     """Load cookies từ env hoặc file"""
+    cookies = None
+    
     # Try env first (Railway friendly)
     cookies_json = os.getenv("TIKTOK_COOKIES_JSON")
     if cookies_json:
         try:
             cookies = json.loads(cookies_json)
             print(f"✅ Loaded {len(cookies)} cookies from env")
-            return cookies
         except Exception as e:
             print(f"⚠️ Failed to parse TIKTOK_COOKIES_JSON: {e}")
     
     # Try file fallback
-    try:
-        if os.path.exists(COOKIES_FILE):
-            with open(COOKIES_FILE, 'r') as f:
-                cookies = json.load(f)
-                print(f"✅ Loaded {len(cookies)} cookies from file")
-                return cookies
-    except Exception as e:
-        print(f"❌ Error loading cookies from file: {e}")
+    if not cookies:
+        try:
+            if os.path.exists(COOKIES_FILE):
+                with open(COOKIES_FILE, 'r') as f:
+                    cookies = json.load(f)
+                    print(f"✅ Loaded {len(cookies)} cookies from file")
+        except Exception as e:
+            print(f"❌ Error loading cookies from file: {e}")
     
-    print("⚠️ No cookies found (env or file)")
-    return None
+    if not cookies:
+        print("⚠️ No cookies found (env or file)")
+        return None
+    
+    # Normalize cookies for Playwright
+    return normalize_cookies(cookies)
+
+
+def normalize_cookies(cookies: list) -> list:
+    """
+    Normalize cookies để tương thích với Playwright
+    - Fix sameSite values
+    - Remove invalid fields
+    """
+    normalized = []
+    
+    for cookie in cookies:
+        # Chỉ giữ các field cần thiết
+        clean_cookie = {
+            "name": cookie.get("name", ""),
+            "value": cookie.get("value", ""),
+            "domain": cookie.get("domain", ".tiktok.com"),
+            "path": cookie.get("path", "/"),
+        }
+        
+        # Skip cookies without name or value
+        if not clean_cookie["name"] or not clean_cookie["value"]:
+            continue
+        
+        # Handle sameSite - Playwright requires: Strict, Lax, or None
+        same_site = str(cookie.get("sameSite", "")).lower()
+        if same_site == "strict":
+            clean_cookie["sameSite"] = "Strict"
+        elif same_site == "none":
+            clean_cookie["sameSite"] = "None"
+        else:
+            # Default to Lax for unspecified/invalid/lax
+            clean_cookie["sameSite"] = "Lax"
+        
+        # Handle secure
+        if cookie.get("secure"):
+            clean_cookie["secure"] = True
+        
+        # Handle httpOnly
+        if cookie.get("httpOnly"):
+            clean_cookie["httpOnly"] = True
+        
+        # Handle expires (Playwright uses expires as seconds since epoch)
+        if cookie.get("expirationDate"):
+            try:
+                clean_cookie["expires"] = float(cookie["expirationDate"])
+            except:
+                pass
+        elif cookie.get("expires") and cookie.get("expires") != -1:
+            try:
+                clean_cookie["expires"] = float(cookie["expires"])
+            except:
+                pass
+        
+        normalized.append(clean_cookie)
+    
+    print(f"🔧 Normalized {len(normalized)} cookies")
+    return normalized
 
 
 def is_cache_valid() -> bool:
