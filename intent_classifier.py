@@ -310,6 +310,22 @@ def classify_intent(text: str) -> Dict[str, Any]:
         "tình hình booking", "tinh hinh booking"
     ])
     
+    # === CHECK CHENG TRƯỚC - nếu có keyword "cheng" ===
+    is_cheng = any(kw in text_lower for kw in CHENG_KEYWORDS)
+    
+    if is_cheng:
+        # Nếu có "cheng" + (booking/koc/báo cáo/cập nhật) → CHENG_REPORT
+        if koc_score > 0 or has_tong_hop or has_report_keywords or is_dashboard:
+            return {
+                "intent": INTENT_CHENG_REPORT,
+                "month": month if month else current_month,
+                "week": week,
+                "year": year,
+                "group_by": "product",
+                "product_filter": product_filter,
+                "original_text": text
+            }
+    
     # Detect nhân sự cụ thể
     nhan_su_detected = None
     for short_name, full_name in NHAN_SU_MAPPING.items():
@@ -346,20 +362,6 @@ def classify_intent(text: str) -> Dict[str, Any]:
             "year": year,
             "report_type": report_type,  # "full", "top_koc", "lien_he", "kpi_nhan_su", "kpi_ca_nhan", "canh_bao"
             "nhan_su": nhan_su_detected,  # Tên nhân sự cụ thể (nếu có)
-            "original_text": text
-        }
-    
-    # 1. CHENG Report - kiểm tra trước KOC nếu có từ khóa "cheng"
-    is_cheng = any(kw in text_lower for kw in CHENG_KEYWORDS)
-    
-    if is_cheng and (koc_score > 0 or has_tong_hop or has_report_keywords):
-        return {
-            "intent": INTENT_CHENG_REPORT,
-            "month": month if month else current_month,
-            "week": week,
-            "year": year,
-            "group_by": "product",
-            "product_filter": product_filter,
             "original_text": text
         }
     

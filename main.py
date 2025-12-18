@@ -789,11 +789,12 @@ async def handle_message_event(event: dict):
     
     print(f"💬 Message: {text}")
     
-    # Check mention
+    # Check mention - CHỈ cần mention trong GROUP, không cần trong P2P
     mentions = message.get("mentions", [])
     is_mentioned = len(mentions) > 0 or "jarvis" in text.lower()
     
-    if not is_mentioned:
+    # P2P (1-1) chat không cần mention, Group cần mention
+    if chat_type == "group" and not is_mentioned:
         print("⏭️ Not mentioned, skipping")
         return
     
@@ -1037,7 +1038,7 @@ async def tiktok_debug():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.6.4"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.6.5"}
 
 @app.get("/health")
 async def health():
