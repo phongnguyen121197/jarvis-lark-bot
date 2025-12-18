@@ -7,13 +7,17 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 # ============ INTENT TYPES ============
-INTENT_KOC_REPORT = "KOC_REPORT"
+INTENT_KOC_REPORT = "KOC_REPORT"  # Báo cáo KOC Kalle (mặc định)
+INTENT_CHENG_REPORT = "CHENG_REPORT"  # Báo cáo KOC Cheng
 INTENT_CONTENT_CALENDAR = "CONTENT_CALENDAR_SUMMARY"
 INTENT_TASK_SUMMARY = "TASK_SUMMARY"  # Phân tích task theo vị trí
 INTENT_GENERAL_SUMMARY = "GENERAL_SUMMARY"
 INTENT_GPT_CHAT = "GPT_CHAT"  # Hỏi ChatGPT trực tiếp
 INTENT_DASHBOARD = "DASHBOARD"  # Dashboard tổng hợp
 INTENT_UNKNOWN = "UNKNOWN"
+
+# Keywords để nhận dạng brand Cheng
+CHENG_KEYWORDS = ["cheng", "chenglovehair", "cheng love hair"]
 
 # ============ KEYWORDS ============
 KOC_KEYWORDS = [
@@ -345,7 +349,21 @@ def classify_intent(text: str) -> Dict[str, Any]:
             "original_text": text
         }
     
-    # 1. KOC Report - ưu tiên cao nhất khi có từ khóa KOC
+    # 1. CHENG Report - kiểm tra trước KOC nếu có từ khóa "cheng"
+    is_cheng = any(kw in text_lower for kw in CHENG_KEYWORDS)
+    
+    if is_cheng and (koc_score > 0 or has_tong_hop or has_report_keywords):
+        return {
+            "intent": INTENT_CHENG_REPORT,
+            "month": month if month else current_month,
+            "week": week,
+            "year": year,
+            "group_by": "product",
+            "product_filter": product_filter,
+            "original_text": text
+        }
+    
+    # 2. KOC Report (KALLE - mặc định) - ưu tiên cao nhất khi có từ khóa KOC
     if koc_score > 0 and koc_score >= content_score:
         # Quyết định group_by:
         # - "brand" nếu hỏi cụ thể Dark Beauty, Lady Killer, etc.

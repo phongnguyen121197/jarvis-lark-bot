@@ -789,3 +789,130 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
     lines.append("💡 Tip: Hỏi \"KPI của Mai\" hoặc \"Cảnh báo KPI\" để xem chi tiết")
     
     return "\n".join(lines)
+
+
+# ============ CHENG REPORT ============
+
+async def generate_cheng_report_text(summary_data: Dict[str, Any]) -> str:
+    """Sinh báo cáo KOC cho CHENG từ dữ liệu summary"""
+    
+    tong_quan = summary_data.get("tong_quan", {})
+    kpi_nhan_su = summary_data.get("kpi_nhan_su", {})
+    lien_he_nhan_su = summary_data.get("lien_he_nhan_su", {})
+    top_koc = summary_data.get("top_koc", [])
+    month = summary_data.get("month")
+    week = summary_data.get("week")
+    
+    lines = []
+    
+    # Header
+    lines.append("🧴 **BÁO CÁO KOC - CHENG**")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
+    
+    week_text = f" - Tuần {week}" if week else ""
+    lines.append(f"📅 Tháng {month}{week_text}")
+    lines.append("")
+    
+    # === TỔNG QUAN KPI ===
+    lines.append("📊 **TỔNG QUAN KPI**")
+    lines.append("───────────────────────────")
+    
+    kpi_sl = tong_quan.get("kpi_so_luong", 0)
+    sl_air = tong_quan.get("so_luong_air", 0)
+    pct_sl = tong_quan.get("pct_kpi_so_luong", 0)
+    
+    kpi_ns = tong_quan.get("kpi_ngan_sach", 0)
+    ns_air = tong_quan.get("ngan_sach_air", 0)
+    pct_ns = tong_quan.get("pct_kpi_ngan_sach", 0)
+    
+    total_gmv = tong_quan.get("total_gmv", 0)
+    
+    # Format số
+    kpi_ns_fmt = f"{kpi_ns:,.0f}".replace(",", ".")
+    ns_air_fmt = f"{ns_air:,.0f}".replace(",", ".")
+    gmv_fmt = f"{total_gmv:,.0f}".replace(",", ".")
+    
+    lines.append(f"📦 Số lượng: **{sl_air}/{kpi_sl}** ({pct_sl}%)")
+    lines.append(f"💰 Ngân sách: **{ns_air_fmt}/{kpi_ns_fmt}** VND ({pct_ns}%)")
+    lines.append(f"📈 GMV KOC: **{gmv_fmt}** VND")
+    lines.append("")
+    
+    # === KPI THEO NHÂN SỰ ===
+    lines.append("👥 **KPI THEO NHÂN SỰ**")
+    lines.append("───────────────────────────")
+    
+    # Sort theo % KPI số lượng
+    sorted_nhan_su = sorted(
+        kpi_nhan_su.items(), 
+        key=lambda x: x[1].get("pct_kpi_so_luong", 0), 
+        reverse=True
+    )
+    
+    for nhan_su, data in sorted_nhan_su:
+        if not nhan_su:
+            continue
+            
+        sl_air = data.get("so_luong_air", 0)
+        kpi_sl = data.get("kpi_so_luong", 0)
+        pct_sl = data.get("pct_kpi_so_luong", 0)
+        pct_ns = data.get("pct_kpi_ngan_sach", 0)
+        
+        # Emoji theo tiến độ
+        if pct_sl >= 100:
+            emoji = "🏆"
+        elif pct_sl >= 70:
+            emoji = "✅"
+        elif pct_sl >= 50:
+            emoji = "🔶"
+        else:
+            emoji = "⚠️"
+        
+        # Rút gọn tên
+        short_name = nhan_su.split(" - ")[0] if " - " in nhan_su else nhan_su
+        if len(short_name) > 15:
+            short_name = short_name[:12] + "..."
+        
+        lines.append(f"{emoji} **{short_name}**: {sl_air}/{kpi_sl} ({pct_sl}%) | NS: {pct_ns}%")
+    
+    lines.append("")
+    
+    # === LIÊN HỆ THEO NHÂN SỰ ===
+    if lien_he_nhan_su:
+        lines.append("📞 **LIÊN HỆ THEO NHÂN SỰ**")
+        lines.append("───────────────────────────")
+        
+        for nhan_su, data in lien_he_nhan_su.items():
+            if not nhan_su:
+                continue
+            
+            total = data.get("tong", 0)
+            deal = data.get("deal", 0)
+            ty_le_deal = data.get("ty_le_deal", 0)
+            
+            short_name = nhan_su.split(" - ")[0] if " - " in nhan_su else nhan_su
+            if len(short_name) > 15:
+                short_name = short_name[:12] + "..."
+            
+            lines.append(f"👤 {short_name}: {total} liên hệ | Deal: {deal} ({ty_le_deal}%)")
+        
+        lines.append("")
+    
+    # === TOP KOC ===
+    if top_koc:
+        lines.append("🌟 **TOP KOC THEO GMV**")
+        lines.append("───────────────────────────")
+        
+        for i, koc in enumerate(top_koc[:5], 1):
+            name = koc.get("name", "N/A")
+            gmv = koc.get("gmv", 0)
+            gmv_fmt = f"{gmv:,.0f}".replace(",", ".")
+            lines.append(f"{i}. {name}: {gmv_fmt} VND")
+        
+        lines.append("")
+    
+    # Footer
+    lines.append("───────────────────────────")
+    lines.append("🧴 Cheng Love Hair | Báo cáo tự động")
+    
+    return "\n".join(lines)
+

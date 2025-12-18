@@ -14,7 +14,7 @@ LARK_APP_SECRET = os.getenv("LARK_APP_SECRET")
 
 LARK_API_BASE = "https://open.larksuite.com/open-apis"
 
-# Base configurations
+# Base configurations - KALLE
 BOOKING_BASE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
     "table_id": "tbleiRLSCGwgLCUT"
@@ -31,7 +31,7 @@ DASHBOARD_KOC_BASE = {
     "table_id": "blko05Rb76NGi5nd"  # Table mới từ URL
 }
 
-# === DASHBOARD TABLES ===
+# === KALLE DASHBOARD TABLES ===
 DASHBOARD_THANG_TABLE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
     "table_id": "tblhf6x9hciClWGz"  # KALLE - DASHBOARD THÁNG
@@ -50,6 +50,36 @@ LIEN_HE_TUAN_TABLE = {
 KALODATA_TABLE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
     "table_id": "tblX6CB3BshhwloA"  # KALLE- PR - Data Kalodata
+}
+
+# === CHENG BASE (MỚI) ===
+CHENG_BASE = {
+    "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
+}
+
+CHENG_BOOKING_TABLE = {
+    "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
+    "table_id": "tblB2pmRRoMA1IzO"  # CHENG - PR - Data list booking (ngày)
+}
+
+CHENG_LIEN_HE_TABLE = {
+    "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
+    "table_id": "tbl6DXM3ZCTQrEm2"  # CHENG - PR - Data liên hệ (tuần)
+}
+
+CHENG_DOANH_THU_KOC_TABLE = {
+    "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
+    "table_id": "tbl1xp8cdxzeccoM"  # CHENG - PR - Data doanh thu Koc (tuần)
+}
+
+CHENG_DOANH_THU_TONG_TABLE = {
+    "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
+    "table_id": "tblbOLW7wp2713M6"  # CHENG - PR - Data doanh thu tổng Cheng (tuần)
+}
+
+CHENG_DASHBOARD_THANG_TABLE = {
+    "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
+    "table_id": "tblhfbIOby6kDYnx"  # CHENG - DASHBOARD THÁNG
 }
 
 # ============ AUTH ============
@@ -1259,33 +1289,55 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     # 4. Lấy data Liên hệ
     lien_he_records = await get_lien_he_records(month=month, week=week)
     
-    # === Đếm số video đã air từ Booking (theo nhân sự và tháng DỰ KIẾN) ===
+    # === Đếm số video đã air từ Booking (theo nhân sự và THÁNG AIR THỰC TẾ) ===
     video_air_by_nhan_su = {}
     for record in booking_records:
         fields = record.get("fields", {})
         
-        # Kiểm tra tháng DỰ KIẾN (không phải tháng air)
-        thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
-        try:
-            if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
-                first = thang_du_kien_raw[0]
-                thang_du_kien = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
-            elif isinstance(thang_du_kien_raw, (int, float)):
-                thang_du_kien = int(thang_du_kien_raw)
-            elif isinstance(thang_du_kien_raw, str):
-                thang_du_kien = int(thang_du_kien_raw)
-            else:
-                thang_du_kien = None
-        except:
-            thang_du_kien = None
-        
-        # Filter theo tháng dự kiến
-        if month and thang_du_kien != month:
-            continue
-        
         # Kiểm tra có link air không
         link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
         if not link_air:
+            continue
+        
+        # Lấy thời gian air thực tế (ưu tiên) hoặc tháng dự kiến (fallback)
+        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
+        thang_air = None
+        
+        # Parse thời gian air để lấy tháng
+        if thoi_gian_air:
+            try:
+                if isinstance(thoi_gian_air, (int, float)):
+                    # Unix timestamp (ms)
+                    dt = datetime.fromtimestamp(thoi_gian_air / 1000)
+                    thang_air = dt.month
+                elif isinstance(thoi_gian_air, str):
+                    # Try parse string date
+                    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
+                        try:
+                            dt = datetime.strptime(thoi_gian_air[:10], fmt)
+                            thang_air = dt.month
+                            break
+                        except:
+                            continue
+            except:
+                pass
+        
+        # Fallback: dùng tháng dự kiến nếu không có thời gian air
+        if thang_air is None:
+            thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
+            try:
+                if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
+                    first = thang_du_kien_raw[0]
+                    thang_air = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+                elif isinstance(thang_du_kien_raw, (int, float)):
+                    thang_air = int(thang_du_kien_raw)
+                elif isinstance(thang_du_kien_raw, str):
+                    thang_air = int(thang_du_kien_raw)
+            except:
+                pass
+        
+        # Filter theo tháng
+        if month and thang_air != month:
             continue
         
         # Lấy tên nhân sự (strip để bỏ khoảng trắng thừa)
@@ -1297,7 +1349,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             video_air_by_nhan_su[nhan_su] = 0
         video_air_by_nhan_su[nhan_su] += 1
     
-    print(f"📹 Video air by nhân sự (tháng dự kiến {month}): {video_air_by_nhan_su}")
+    print(f"📹 Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
     
     # === Tổng hợp KPI theo nhân sự (CỘNG TỔNG sản phẩm, CHỈ LẤY TUẦN 1) ===
     kpi_by_nhan_su = {}
@@ -1415,5 +1467,328 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         },
         "kpi_nhan_su": kpi_by_nhan_su,
         "top_koc": top_koc,
+        "lien_he_nhan_su": lien_he_by_nhan_su,
+    }
+
+
+# ============ CHENG FUNCTIONS ============
+
+async def get_cheng_booking_records(month: int = None, week: int = None) -> List[Dict]:
+    """Lấy danh sách booking từ bảng CHENG"""
+    records = await get_all_records(
+        CHENG_BOOKING_TABLE["app_token"],
+        CHENG_BOOKING_TABLE["table_id"]
+    )
+    
+    print(f"📋 CHENG Booking: Total records = {len(records)}, filter month = {month}, week = {week}")
+    
+    if not month and not week:
+        return records
+    
+    filtered = []
+    month_dist = {}
+    
+    for record in records:
+        fields = record.get("fields", {})
+        
+        # Lấy tháng dự kiến
+        thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
+        thang_du_kien = None
+        
+        try:
+            if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
+                first = thang_du_kien_raw[0]
+                thang_du_kien = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+            elif isinstance(thang_du_kien_raw, (int, float)):
+                thang_du_kien = int(thang_du_kien_raw)
+            elif isinstance(thang_du_kien_raw, str):
+                thang_du_kien = int(thang_du_kien_raw)
+        except:
+            pass
+        
+        if thang_du_kien:
+            month_dist[thang_du_kien] = month_dist.get(thang_du_kien, 0) + 1
+        
+        # Filter by month
+        if month and thang_du_kien != month:
+            continue
+        
+        filtered.append(record)
+    
+    print(f"📋 CHENG Month distribution: {month_dist}")
+    print(f"📋 CHENG After filter: {len(filtered)} records")
+    
+    return filtered
+
+
+async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
+    """Lấy records từ bảng CHENG - DASHBOARD THÁNG"""
+    records = await get_all_records(
+        CHENG_DASHBOARD_THANG_TABLE["app_token"],
+        CHENG_DASHBOARD_THANG_TABLE["table_id"]
+    )
+    
+    print(f"📊 CHENG Dashboard: Total records = {len(records)}, filter month = {month}")
+    
+    parsed = []
+    for r in records:
+        fields = r.get("fields", {})
+        
+        # Parse tháng
+        thang_raw = fields.get("Tháng") or fields.get("thang")
+        thang = None
+        try:
+            if isinstance(thang_raw, list) and len(thang_raw) > 0:
+                first = thang_raw[0]
+                thang = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+            elif isinstance(thang_raw, (int, float)):
+                thang = int(thang_raw)
+            elif isinstance(thang_raw, str):
+                thang = int(thang_raw)
+        except:
+            pass
+        
+        if month and thang != month:
+            continue
+        
+        parsed.append({
+            "record_id": r.get("record_id"),
+            "thang": thang,
+            "tuan": fields.get("Tuần") or fields.get("tuan"),
+            "san_pham": fields.get("Sản phẩm") or fields.get("san_pham"),
+            "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
+            "kpi_so_luong": fields.get("KPI - Số lượng") or fields.get("kpi_so_luong") or 0,
+            "kpi_ngan_sach": fields.get("KPI - Ngân sách") or fields.get("kpi_ngan_sach") or 0,
+            "so_luong_air": fields.get("Số lượng - Air") or fields.get("so_luong_air") or 0,
+            "ngan_sach_tong_air": fields.get("Ngân sách tổng - Air") or fields.get("ngan_sach_tong_air") or 0,
+        })
+    
+    print(f"📊 CHENG Dashboard after filter: {len(parsed)} records")
+    return parsed
+
+
+async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List[Dict]:
+    """Lấy records từ bảng CHENG - PR - Data liên hệ (tuần)"""
+    records = await get_all_records(
+        CHENG_LIEN_HE_TABLE["app_token"],
+        CHENG_LIEN_HE_TABLE["table_id"]
+    )
+    
+    print(f"📞 CHENG Liên hệ: Total records = {len(records)}, filter month = {month}")
+    
+    parsed = []
+    month_dist = {}
+    
+    for r in records:
+        fields = r.get("fields", {})
+        
+        # Parse tháng
+        thang_raw = fields.get("Tháng") or fields.get("thang")
+        thang = None
+        try:
+            if isinstance(thang_raw, list) and len(thang_raw) > 0:
+                first = thang_raw[0]
+                thang = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+            elif isinstance(thang_raw, (int, float)):
+                thang = int(thang_raw)
+            elif isinstance(thang_raw, str):
+                thang = int(thang_raw)
+        except:
+            pass
+        
+        if thang:
+            month_dist[thang] = month_dist.get(thang, 0) + 1
+        
+        if month and thang != month:
+            continue
+        
+        parsed.append({
+            "record_id": r.get("record_id"),
+            "thang": thang,
+            "tuan": fields.get("Tuần") or fields.get("tuan"),
+            "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
+            "tong_lien_he": fields.get("Tổng liên hệ") or fields.get("tong_lien_he") or 0,
+            "da_deal": fields.get("Đã deal") or fields.get("da_deal") or 0,
+            "dang_trao_doi": fields.get("Đang trao đổi") or fields.get("dang_trao_doi") or 0,
+            "tu_choi": fields.get("Từ chối") or fields.get("tu_choi") or 0,
+        })
+    
+    print(f"📞 CHENG Month distribution: {month_dist}")
+    print(f"📞 CHENG After filter: {len(parsed)} records")
+    
+    return parsed
+
+
+async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dict:
+    """
+    Tổng hợp báo cáo KOC cho CHENG
+    Tương tự generate_koc_summary nhưng cho bảng Cheng
+    """
+    # Lấy dữ liệu từ các bảng Cheng
+    booking_records = await get_cheng_booking_records(month=month, week=week)
+    dashboard_records = await get_cheng_dashboard_records(month=month)
+    lien_he_records = await get_cheng_lien_he_records(month=month, week=week)
+    
+    # === Đếm số video đã air từ Booking (theo nhân sự và THÁNG AIR THỰC TẾ) ===
+    video_air_by_nhan_su = {}
+    for record in booking_records:
+        fields = record.get("fields", {})
+        
+        # Kiểm tra có link air không
+        link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
+        if not link_air:
+            continue
+        
+        # Lấy thời gian air thực tế
+        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
+        thang_air = None
+        
+        if thoi_gian_air:
+            try:
+                if isinstance(thoi_gian_air, (int, float)):
+                    dt = datetime.fromtimestamp(thoi_gian_air / 1000)
+                    thang_air = dt.month
+                elif isinstance(thoi_gian_air, str):
+                    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
+                        try:
+                            dt = datetime.strptime(thoi_gian_air[:10], fmt)
+                            thang_air = dt.month
+                            break
+                        except:
+                            continue
+            except:
+                pass
+        
+        # Fallback: dùng tháng dự kiến
+        if thang_air is None:
+            thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
+            try:
+                if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
+                    first = thang_du_kien_raw[0]
+                    thang_air = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+                elif isinstance(thang_du_kien_raw, (int, float)):
+                    thang_air = int(thang_du_kien_raw)
+                elif isinstance(thang_du_kien_raw, str):
+                    thang_air = int(thang_du_kien_raw)
+            except:
+                pass
+        
+        if month and thang_air != month:
+            continue
+        
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        
+        if nhan_su not in video_air_by_nhan_su:
+            video_air_by_nhan_su[nhan_su] = 0
+        video_air_by_nhan_su[nhan_su] += 1
+    
+    print(f"📹 CHENG Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
+    
+    # === Tổng hợp KPI theo nhân sự ===
+    kpi_by_nhan_su = {}
+    
+    for r in dashboard_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        
+        # CHỈ LẤY TUẦN 1
+        tuan = r.get("tuan")
+        if tuan and tuan != "Tuần 1":
+            continue
+        
+        if nhan_su not in kpi_by_nhan_su:
+            kpi_by_nhan_su[nhan_su] = {
+                "kpi_so_luong": 0,
+                "kpi_ngan_sach": 0,
+                "so_luong_air": 0,
+                "ngan_sach_air": 0,
+                "pct_kpi_so_luong": 0,
+                "pct_kpi_ngan_sach": 0,
+            }
+        
+        try:
+            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += int(r.get("kpi_so_luong") or 0)
+            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += int(r.get("kpi_ngan_sach") or 0)
+        except:
+            pass
+    
+    # Tính ngân sách air từ tất cả các tuần
+    for r in dashboard_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        if nhan_su in kpi_by_nhan_su:
+            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += r.get("ngan_sach_tong_air") or 0
+    
+    # Gán số video đã air từ Booking
+    for nhan_su in kpi_by_nhan_su:
+        kpi_by_nhan_su[nhan_su]["so_luong_air"] = video_air_by_nhan_su.get(nhan_su, 0)
+    
+    # Tính %
+    for nhan_su, data in kpi_by_nhan_su.items():
+        if data["kpi_so_luong"] > 0:
+            data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
+        if data["kpi_ngan_sach"] > 0:
+            data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
+    
+    print(f"📊 CHENG KPI by nhân sự: {kpi_by_nhan_su}")
+    
+    # === Tổng hợp liên hệ theo nhân sự ===
+    lien_he_by_nhan_su = {}
+    for r in lien_he_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        
+        if nhan_su not in lien_he_by_nhan_su:
+            lien_he_by_nhan_su[nhan_su] = {
+                "tong_lien_he": 0,
+                "da_deal": 0,
+                "dang_trao_doi": 0,
+                "tu_choi": 0,
+            }
+        
+        try:
+            lien_he_by_nhan_su[nhan_su]["tong_lien_he"] += int(r.get("tong_lien_he") or 0)
+            lien_he_by_nhan_su[nhan_su]["da_deal"] += int(r.get("da_deal") or 0)
+            lien_he_by_nhan_su[nhan_su]["dang_trao_doi"] += int(r.get("dang_trao_doi") or 0)
+            lien_he_by_nhan_su[nhan_su]["tu_choi"] += int(r.get("tu_choi") or 0)
+        except:
+            pass
+    
+    # Tính tỷ lệ
+    for ns, data in lien_he_by_nhan_su.items():
+        total = data["tong_lien_he"]
+        if total > 0:
+            data["ty_le_deal"] = round(data["da_deal"] / total * 100, 1)
+            data["ty_le_trao_doi"] = round(data["dang_trao_doi"] / total * 100, 1)
+            data["ty_le_tu_choi"] = round(data["tu_choi"] / total * 100, 1)
+        else:
+            data["ty_le_deal"] = 0
+            data["ty_le_trao_doi"] = 0
+            data["ty_le_tu_choi"] = 0
+    
+    # === Tổng quan ===
+    total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
+    total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
+    total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
+    total_ngan_sach_air = sum(d["ngan_sach_air"] for d in kpi_by_nhan_su.values())
+    
+    return {
+        "brand": "CHENG",
+        "month": month,
+        "week": week,
+        "tong_quan": {
+            "kpi_so_luong": total_kpi_so_luong,
+            "so_luong_air": total_so_luong_air,
+            "pct_kpi_so_luong": round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0,
+            "kpi_ngan_sach": total_kpi_ngan_sach,
+            "ngan_sach_air": total_ngan_sach_air,
+            "pct_kpi_ngan_sach": round(total_ngan_sach_air / total_kpi_ngan_sach * 100, 1) if total_kpi_ngan_sach > 0 else 0,
+        },
+        "kpi_nhan_su": kpi_by_nhan_su,
         "lien_he_nhan_su": lien_he_by_nhan_su,
     }
