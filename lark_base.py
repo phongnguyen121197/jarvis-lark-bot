@@ -1351,47 +1351,52 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     
     print(f"📹 Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
     
-    # === Tổng hợp KPI theo nhân sự (CỘNG TỔNG sản phẩm, CHỈ LẤY TUẦN 1) ===
+    # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
+    # Logic mới: Lấy trực tiếp từ các cột trong bảng Dashboard
+    # - KPI (target): từ "Số lượng - Deal" của Tuần 1
+    # - Số lượng air tổng: từ "Số lượng tổng - Air" của Tuần 1
+    # - Ngân sách air tổng: từ "Ngân sách tổng - Air" của Tuần 1
+    
     kpi_by_nhan_su = {}
     
+    # BƯỚC 1: Lấy KPI và số liệu TỔNG từ Tuần 1 (cộng tất cả sản phẩm)
     for r in dashboard_records:
         nhan_su = r["nhan_su"]
         if nhan_su:
             nhan_su = nhan_su.strip()
         
-        # CHỈ LẤY TUẦN 1 để tránh KPI bị nhân lên theo số tuần
+        # CHỈ LẤY TUẦN 1 cho KPI và số liệu tổng
         tuan = r.get("tuan")
         if tuan and tuan != "Tuần 1":
             continue
         
         if nhan_su not in kpi_by_nhan_su:
             kpi_by_nhan_su[nhan_su] = {
-                "kpi_so_luong": 0,
-                "kpi_ngan_sach": 0,
-                "so_luong_air": 0,
-                "ngan_sach_air": 0,
+                "kpi_so_luong": 0,      # KPI target
+                "kpi_ngan_sach": 0,     # KPI ngân sách target
+                "so_luong_air": 0,      # Số lượng đã air (tổng)
+                "ngan_sach_air": 0,     # Ngân sách đã air (tổng)
                 "pct_kpi_so_luong": 0,
                 "pct_kpi_ngan_sach": 0,
             }
         
-        # CỘNG TỔNG KPI của tất cả sản phẩm (trong Tuần 1)
+        # KPI = "Số lượng - Deal" hoặc "KPI Số lượng"
         try:
-            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += int(r.get("kpi_so_luong") or 0)
-            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += int(r.get("kpi_ngan_sach") or 0)
+            kpi_sl = int(r.get("so_luong_deal") or r.get("kpi_so_luong") or 0)
+            kpi_ns = int(r.get("kpi_ngan_sach") or 0)
+            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += kpi_sl
+            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += kpi_ns
         except:
             pass
-    
-    # Tính ngân sách air từ tất cả các tuần (ngân sách thực tế cần cộng tất cả tuần)
-    for r in dashboard_records:
-        nhan_su = r["nhan_su"]
-        if nhan_su:
-            nhan_su = nhan_su.strip()
-        if nhan_su in kpi_by_nhan_su:
-            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += r.get("ngan_sach_tong_air") or 0
-    
-    # Gán số video đã air từ Booking
-    for nhan_su in kpi_by_nhan_su:
-        kpi_by_nhan_su[nhan_su]["so_luong_air"] = video_air_by_nhan_su.get(nhan_su, 0)
+        
+        # Số lượng air tổng = "Số lượng tổng - Air" (từ Tuần 1)
+        try:
+            sl_tong_air = int(r.get("so_luong_tong_air") or 0)
+            ns_tong_air = int(r.get("ngan_sach_tong_air") or 0)
+            kpi_by_nhan_su[nhan_su]["so_luong_air"] += sl_tong_air
+            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += ns_tong_air
+        except:
+            pass
     
     # Tính % KPI cho mỗi nhân sự
     for ns, data in kpi_by_nhan_su.items():
@@ -1400,7 +1405,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         if data["kpi_ngan_sach"] > 0:
             data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
     
-    print(f"📊 KPI by nhân sự: {kpi_by_nhan_su}")
+    print(f"📊 KPI by nhân sự (từ Dashboard): {kpi_by_nhan_su}")
     
     # === Top KOC doanh số ===
     koc_gmv = {}
@@ -1452,6 +1457,8 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
     total_ngan_sach_air = sum(d["ngan_sach_air"] for d in kpi_by_nhan_su.values())
     total_gmv = sum(koc_gmv.values())
+    
+    print(f"📊 TỔNG QUAN: {total_so_luong_air}/{total_kpi_so_luong} ({round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0}%)")
     
     return {
         "month": month,
@@ -1559,7 +1566,10 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
             "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
             "kpi_so_luong": fields.get("KPI - Số lượng") or fields.get("kpi_so_luong") or 0,
             "kpi_ngan_sach": fields.get("KPI - Ngân sách") or fields.get("kpi_ngan_sach") or 0,
+            "so_luong_deal": fields.get("Số lượng - Deal") or fields.get("so_luong_deal") or 0,
             "so_luong_air": fields.get("Số lượng - Air") or fields.get("so_luong_air") or 0,
+            "so_luong_tong_air": fields.get("Số lượng tổng - Air") or fields.get("so_luong_tong_air") or 0,
+            "ngan_sach_air": fields.get("Ngân sách - Air") or fields.get("ngan_sach_air") or 0,
             "ngan_sach_tong_air": fields.get("Ngân sách tổng - Air") or fields.get("ngan_sach_tong_air") or 0,
         })
     
@@ -1686,7 +1696,12 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
     
     print(f"📹 CHENG Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
     
-    # === Tổng hợp KPI theo nhân sự ===
+    # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
+    # Logic: Lấy trực tiếp từ các cột trong bảng Dashboard
+    # - KPI (target): từ "KPI - Số lượng" hoặc "Số lượng - Deal" của Tuần 1
+    # - Số lượng air tổng: từ "Số lượng tổng - Air" của Tuần 1
+    # - Ngân sách air tổng: từ "Ngân sách tổng - Air" của Tuần 1
+    
     kpi_by_nhan_su = {}
     
     for r in dashboard_records:
@@ -1694,7 +1709,7 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
         if nhan_su:
             nhan_su = nhan_su.strip()
         
-        # CHỈ LẤY TUẦN 1
+        # CHỈ LẤY TUẦN 1 cho KPI và số liệu tổng
         tuan = r.get("tuan")
         if tuan and tuan != "Tuần 1":
             continue
@@ -1709,23 +1724,23 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
                 "pct_kpi_ngan_sach": 0,
             }
         
+        # KPI = "Số lượng - Deal" hoặc "KPI - Số lượng"
         try:
-            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += int(r.get("kpi_so_luong") or 0)
-            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += int(r.get("kpi_ngan_sach") or 0)
+            kpi_sl = int(r.get("so_luong_deal") or r.get("kpi_so_luong") or 0)
+            kpi_ns = int(r.get("kpi_ngan_sach") or 0)
+            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += kpi_sl
+            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += kpi_ns
         except:
             pass
-    
-    # Tính ngân sách air từ tất cả các tuần
-    for r in dashboard_records:
-        nhan_su = r["nhan_su"]
-        if nhan_su:
-            nhan_su = nhan_su.strip()
-        if nhan_su in kpi_by_nhan_su:
-            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += r.get("ngan_sach_tong_air") or 0
-    
-    # Gán số video đã air từ Booking
-    for nhan_su in kpi_by_nhan_su:
-        kpi_by_nhan_su[nhan_su]["so_luong_air"] = video_air_by_nhan_su.get(nhan_su, 0)
+        
+        # Số lượng air tổng = "Số lượng tổng - Air" (từ Tuần 1)
+        try:
+            sl_tong_air = int(r.get("so_luong_tong_air") or 0)
+            ns_tong_air = int(r.get("ngan_sach_tong_air") or 0)
+            kpi_by_nhan_su[nhan_su]["so_luong_air"] += sl_tong_air
+            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += ns_tong_air
+        except:
+            pass
     
     # Tính %
     for nhan_su, data in kpi_by_nhan_su.items():
@@ -1734,7 +1749,7 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
         if data["kpi_ngan_sach"] > 0:
             data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
     
-    print(f"📊 CHENG KPI by nhân sự: {kpi_by_nhan_su}")
+    print(f"📊 CHENG KPI by nhân sự (từ Dashboard): {kpi_by_nhan_su}")
     
     # === Tổng hợp liên hệ theo nhân sự ===
     lien_he_by_nhan_su = {}
