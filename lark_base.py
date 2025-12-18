@@ -1156,13 +1156,6 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
             "pct_kpi_so_luong": fields.get("% KPI Số lượng tổng", 0),
             "pct_kpi_ngan_sach": fields.get("% KPI Ngân sách tổng - Air", 0),
         })
-        
-        # Debug: Log first record of each nhân sự in Tuần 1
-        if tuan == "Tuần 1":
-            ns = safe_extract_person_name(fields.get("Nhân sự book"))
-            sl_deal = fields.get("Số lượng - Deal", 0)
-            sl_tong_air = fields.get("Số lượng tổng - Air", 0)
-            print(f"   🔍 DEBUG Tuần 1: {ns} | Sản phẩm: {fields.get('Sản phẩm')} | Deal: {sl_deal} | Tổng Air: {sl_tong_air}")
     
     print(f"📊 Month distribution: {month_distribution}")
     print(f"📊 After filter: {len(result)} records")
@@ -1359,15 +1352,13 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     print(f"📹 Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
     
     # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
-    # LOGIC:
-    # - "Số lượng tổng - Air" = lookup từ sheet riêng của nhân sự (giống nhau cho tất cả sản phẩm)
-    #   → Chỉ lấy 1 lần (từ record đầu tiên)
-    # - "Số lượng - Deal" = KPI của từng sản phẩm 
-    #   → Cộng tổng tất cả sản phẩm trong Tuần 1
+    # LOGIC ĐÚNG:
+    # - "KPI Số lượng" = KPI của từng sản phẩm → CỘNG TỔNG tất cả sản phẩm
+    # - "Số lượng tổng - Air" = Air của từng sản phẩm → CỘNG TỔNG tất cả sản phẩm
+    # Chỉ lấy Tuần 1 để tránh nhân đôi
     
     kpi_by_nhan_su = {}
     
-    # BƯỚC 1: Cộng tổng KPI từ tất cả sản phẩm (Tuần 1)
     for r in dashboard_records:
         nhan_su = r["nhan_su"]
         if nhan_su:
@@ -1380,50 +1371,39 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         
         if nhan_su not in kpi_by_nhan_su:
             kpi_by_nhan_su[nhan_su] = {
-                "kpi_so_luong": 0,      # Cộng tổng từ tất cả sản phẩm
+                "kpi_so_luong": 0,
                 "kpi_ngan_sach": 0,
-                "so_luong_air": None,   # Chỉ lấy 1 lần (lookup)
-                "ngan_sach_air": None,
+                "so_luong_air": 0,
+                "ngan_sach_air": 0,
                 "pct_kpi_so_luong": 0,
                 "pct_kpi_ngan_sach": 0,
             }
         
-        # Cộng tổng KPI (từ field "KPI Số lượng" hoặc "Số lượng - Deal")
+        # CỘNG TỔNG KPI và Air từ tất cả sản phẩm
         try:
-            # Ưu tiên "KPI Số lượng" nếu có, fallback sang "Số lượng - Deal"
-            kpi_sl = int(r.get("kpi_so_luong") or r.get("so_luong_deal") or 0)
+            kpi_sl = int(r.get("kpi_so_luong") or 0)
             kpi_ns = int(r.get("kpi_ngan_sach") or 0)
+            sl_air = int(r.get("so_luong_tong_air") or 0)
+            ns_air = int(r.get("ngan_sach_tong_air") or 0)
+            
             kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += kpi_sl
             kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += kpi_ns
-        except:
-            pass
-        
-        # Số lượng tổng air: chỉ lấy 1 lần (vì là lookup, giống nhau cho mọi sản phẩm)
-        if kpi_by_nhan_su[nhan_su]["so_luong_air"] is None:
-            try:
-                sl_tong_air = int(r.get("so_luong_tong_air") or 0)
-                ns_tong_air = int(r.get("ngan_sach_tong_air") or 0)
-                kpi_by_nhan_su[nhan_su]["so_luong_air"] = sl_tong_air
-                kpi_by_nhan_su[nhan_su]["ngan_sach_air"] = ns_tong_air
-                print(f"   📌 {nhan_su}: Air={sl_tong_air}, KPI đang cộng...")
-            except:
-                kpi_by_nhan_su[nhan_su]["so_luong_air"] = 0
-                kpi_by_nhan_su[nhan_su]["ngan_sach_air"] = 0
-    
-    # BƯỚC 2: Tính % KPI
-    for nhan_su, data in kpi_by_nhan_su.items():
-        # Đảm bảo so_luong_air không phải None
-        if data["so_luong_air"] is None:
-            data["so_luong_air"] = 0
-        if data["ngan_sach_air"] is None:
-            data["ngan_sach_air"] = 0
+            kpi_by_nhan_su[nhan_su]["so_luong_air"] += sl_air
+            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += ns_air
             
+            san_pham = r.get("san_pham") or "N/A"
+            print(f"   📌 {nhan_su} | {san_pham}: KPI={kpi_sl}, Air={sl_air}")
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+    
+    # Tính % KPI
+    for nhan_su, data in kpi_by_nhan_su.items():
         if data["kpi_so_luong"] > 0:
             data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
         if data["kpi_ngan_sach"] > 0:
             data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
         
-        print(f"   ✅ {nhan_su}: {data['so_luong_air']}/{data['kpi_so_luong']}")
+        print(f"   ✅ TỔNG {nhan_su}: {data['so_luong_air']}/{data['kpi_so_luong']}")
     
     print(f"📊 KPI by nhân sự (từ Dashboard): {kpi_by_nhan_su}")
     
@@ -1717,9 +1697,7 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
     print(f"📹 CHENG Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
     
     # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
-    # LOGIC:
-    # - "Số lượng tổng - Air" = lookup từ sheet riêng → chỉ lấy 1 lần
-    # - "Số lượng - Deal" = KPI từng sản phẩm → cộng tổng
+    # CỘNG TỔNG cả KPI và Air từ tất cả sản phẩm (Tuần 1)
     
     kpi_by_nhan_su = {}
     
@@ -1737,37 +1715,28 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
             kpi_by_nhan_su[nhan_su] = {
                 "kpi_so_luong": 0,
                 "kpi_ngan_sach": 0,
-                "so_luong_air": None,
-                "ngan_sach_air": None,
+                "so_luong_air": 0,
+                "ngan_sach_air": 0,
                 "pct_kpi_so_luong": 0,
                 "pct_kpi_ngan_sach": 0,
             }
         
-        # Cộng tổng KPI
+        # CỘNG TỔNG từ tất cả sản phẩm
         try:
-            kpi_sl = int(r.get("so_luong_deal") or 0)
+            kpi_sl = int(r.get("kpi_so_luong") or 0)
             kpi_ns = int(r.get("kpi_ngan_sach") or 0)
+            sl_air = int(r.get("so_luong_tong_air") or 0)
+            ns_air = int(r.get("ngan_sach_tong_air") or 0)
+            
             kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += kpi_sl
             kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += kpi_ns
+            kpi_by_nhan_su[nhan_su]["so_luong_air"] += sl_air
+            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += ns_air
         except:
             pass
-        
-        # Số lượng tổng air: chỉ lấy 1 lần
-        if kpi_by_nhan_su[nhan_su]["so_luong_air"] is None:
-            try:
-                kpi_by_nhan_su[nhan_su]["so_luong_air"] = int(r.get("so_luong_tong_air") or 0)
-                kpi_by_nhan_su[nhan_su]["ngan_sach_air"] = int(r.get("ngan_sach_tong_air") or 0)
-            except:
-                kpi_by_nhan_su[nhan_su]["so_luong_air"] = 0
-                kpi_by_nhan_su[nhan_su]["ngan_sach_air"] = 0
     
     # Tính %
     for nhan_su, data in kpi_by_nhan_su.items():
-        if data["so_luong_air"] is None:
-            data["so_luong_air"] = 0
-        if data["ngan_sach_air"] is None:
-            data["ngan_sach_air"] = 0
-            
         if data["kpi_so_luong"] > 0:
             data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
         if data["kpi_ngan_sach"] > 0:

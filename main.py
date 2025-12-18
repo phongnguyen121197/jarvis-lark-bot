@@ -1037,7 +1037,7 @@ async def tiktok_debug():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.6.3"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.6.4"}
 
 @app.get("/health")
 async def health():
