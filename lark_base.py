@@ -1537,12 +1537,23 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
     
     print(f"📊 CHENG Dashboard: Total records = {len(records)}, filter month = {month}")
     
+    # Debug: in ra các field names của record đầu tiên
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"   🔍 CHENG Dashboard field names: {list(first_fields.keys())[:10]}")
+        # Debug: in ra giá trị của các field tháng có thể có
+        for key in ["Tháng", "thang", "Tháng báo cáo", "Month"]:
+            if key in first_fields:
+                print(f"   🔍 Field '{key}' = {first_fields[key]}")
+    
     parsed = []
+    month_dist = {}  # Debug distribution
+    
     for r in records:
         fields = r.get("fields", {})
         
-        # Parse tháng
-        thang_raw = fields.get("Tháng") or fields.get("thang")
+        # Parse tháng - thử nhiều field names có thể
+        thang_raw = fields.get("Tháng") or fields.get("thang") or fields.get("Tháng báo cáo")
         thang = None
         try:
             if isinstance(thang_raw, list) and len(thang_raw) > 0:
@@ -1551,9 +1562,16 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
             elif isinstance(thang_raw, (int, float)):
                 thang = int(thang_raw)
             elif isinstance(thang_raw, str):
-                thang = int(thang_raw)
+                # Có thể là "Tháng 12" hoặc "12"
+                import re
+                match = re.search(r'\d+', thang_raw)
+                if match:
+                    thang = int(match.group())
         except:
             pass
+        
+        # Debug distribution
+        month_dist[thang] = month_dist.get(thang, 0) + 1
         
         if month and thang != month:
             continue
@@ -1561,7 +1579,7 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
         parsed.append({
             "record_id": r.get("record_id"),
             "thang": thang,
-            "tuan": fields.get("Tuần") or fields.get("tuan"),
+            "tuan": fields.get("Tuần") or fields.get("tuan") or fields.get("Tuần báo cáo"),
             "san_pham": fields.get("Sản phẩm") or fields.get("san_pham"),
             "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
             "kpi_so_luong": fields.get("KPI - Số lượng") or fields.get("kpi_so_luong") or 0,
@@ -1573,6 +1591,7 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
             "ngan_sach_tong_air": fields.get("Ngân sách tổng - Air") or fields.get("ngan_sach_tong_air") or 0,
         })
     
+    print(f"   📊 CHENG Month distribution: {month_dist}")
     print(f"📊 CHENG Dashboard after filter: {len(parsed)} records")
     return parsed
 
@@ -1586,14 +1605,19 @@ async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List
     
     print(f"📞 CHENG Liên hệ: Total records = {len(records)}, filter month = {month}")
     
+    # Debug: in ra các field names của record đầu tiên
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"   🔍 CHENG Liên hệ field names: {list(first_fields.keys())[:10]}")
+    
     parsed = []
     month_dist = {}
     
     for r in records:
         fields = r.get("fields", {})
         
-        # Parse tháng
-        thang_raw = fields.get("Tháng") or fields.get("thang")
+        # Parse tháng - thử nhiều field names
+        thang_raw = fields.get("Tháng") or fields.get("thang") or fields.get("Tháng báo cáo")
         thang = None
         try:
             if isinstance(thang_raw, list) and len(thang_raw) > 0:
@@ -1602,12 +1626,14 @@ async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List
             elif isinstance(thang_raw, (int, float)):
                 thang = int(thang_raw)
             elif isinstance(thang_raw, str):
-                thang = int(thang_raw)
+                import re
+                match = re.search(r'\d+', thang_raw)
+                if match:
+                    thang = int(match.group())
         except:
             pass
         
-        if thang:
-            month_dist[thang] = month_dist.get(thang, 0) + 1
+        month_dist[thang] = month_dist.get(thang, 0) + 1
         
         if month and thang != month:
             continue
@@ -1615,7 +1641,7 @@ async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List
         parsed.append({
             "record_id": r.get("record_id"),
             "thang": thang,
-            "tuan": fields.get("Tuần") or fields.get("tuan"),
+            "tuan": fields.get("Tuần") or fields.get("tuan") or fields.get("Tuần báo cáo"),
             "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
             "tong_lien_he": fields.get("Tổng liên hệ") or fields.get("tong_lien_he") or 0,
             "da_deal": fields.get("Đã deal") or fields.get("da_deal") or 0,
