@@ -2038,16 +2038,32 @@ async def get_note_by_key(chat_id: str, note_key: str) -> Optional[Dict]:
 
 
 async def create_note(chat_id: str, note_key: str, note_value: str, deadline: str = None) -> Dict:
-    """Tạo note mới"""
+    """Tạo note mới
+    Lark Bitable DateTime fields require timestamp in milliseconds
+    """
+    # Convert datetime to milliseconds timestamp for Lark Bitable
+    now_timestamp = int(datetime.now().timestamp() * 1000)
+    
     fields = {
         "chat_id": chat_id,
         "note_key": note_key,
         "note_value": note_value,
-        "created_at": datetime.now().isoformat(),
+        "created_at": now_timestamp,
     }
     
     if deadline:
-        fields["deadline"] = deadline
+        # Try to parse deadline and convert to timestamp
+        try:
+            from dateutil import parser
+            deadline_dt = parser.parse(deadline)
+            fields["deadline"] = int(deadline_dt.timestamp() * 1000)
+        except:
+            # If parsing fails, try to use as-is or skip
+            try:
+                # Maybe it's already a timestamp string
+                fields["deadline"] = int(float(deadline) * 1000) if float(deadline) < 2000000000 else int(deadline)
+            except:
+                pass  # Skip deadline if can't parse
     
     result = await create_record(
         NOTES_TABLE["app_token"],

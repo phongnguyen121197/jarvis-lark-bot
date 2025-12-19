@@ -223,7 +223,11 @@ class NotesManager:
             if not deadline:
                 continue
             try:
-                dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
+                # Handle both timestamp (milliseconds) and ISO format
+                if isinstance(deadline, (int, float)):
+                    dl = datetime.fromtimestamp(deadline / 1000)
+                else:
+                    dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
                 if now <= dl <= cutoff:
                     upcoming.append((dl, note))
             except:
@@ -253,6 +257,42 @@ class NotesManager:
             lines.append(f"• {time_str}: **{key}**\n  {value[:80]}{'...' if len(value) > 80 else ''}")
         
         return "\n".join(lines)
+
+    async def get_notes_due_soon(self, days: int = 1) -> list:
+        """
+        Lấy danh sách notes có deadline sắp đến (trả về list thay vì string)
+        Dùng cho reminder scheduler
+        """
+        notes = await get_notes_by_chat_id(self.chat_id)
+        
+        if not notes:
+            return []
+        
+        now = datetime.now()
+        cutoff = now + timedelta(days=days)
+        
+        upcoming = []
+        for note in notes:
+            deadline = note.get("deadline")
+            if not deadline:
+                continue
+            try:
+                # Handle both timestamp (milliseconds) and ISO format
+                if isinstance(deadline, (int, float)):
+                    dl = datetime.fromtimestamp(deadline / 1000)
+                else:
+                    dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
+                if now <= dl <= cutoff:
+                    upcoming.append({
+                        "note_key": note.get("note_key", ""),
+                        "note_value": note.get("note_value", ""),
+                        "deadline": dl,
+                        "record_id": note.get("record_id", "")
+                    })
+            except:
+                pass
+        
+        return upcoming
 
 
 async def handle_notes_intent(chat_id: str, intent: str, message: str) -> str:
