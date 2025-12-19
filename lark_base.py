@@ -196,6 +196,80 @@ async def get_all_records(
     
     return all_records[:max_records]
 
+
+async def create_record(app_token: str, table_id: str, fields: Dict) -> Dict:
+    """Tạo record mới trong Bitable"""
+    token = await get_tenant_access_token()
+    
+    url = f"{LARK_API_BASE}/bitable/v1/apps/{app_token}/tables/{table_id}/records"
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            json={"fields": fields}
+        )
+        
+        data = response.json()
+        
+        if data.get("code") != 0:
+            print(f"❌ Create record error: {data}")
+            return {"error": data.get("msg", "Unknown error")}
+        
+        return data.get("data", {}).get("record", {})
+
+
+async def update_record(app_token: str, table_id: str, record_id: str, fields: Dict) -> Dict:
+    """Cập nhật record trong Bitable"""
+    token = await get_tenant_access_token()
+    
+    url = f"{LARK_API_BASE}/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.put(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            json={"fields": fields}
+        )
+        
+        data = response.json()
+        
+        if data.get("code") != 0:
+            print(f"❌ Update record error: {data}")
+            return {"error": data.get("msg", "Unknown error")}
+        
+        return data.get("data", {}).get("record", {})
+
+
+async def delete_record(app_token: str, table_id: str, record_id: str) -> Dict:
+    """Xóa record trong Bitable"""
+    token = await get_tenant_access_token()
+    
+    url = f"{LARK_API_BASE}/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.delete(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}"
+            }
+        )
+        
+        data = response.json()
+        
+        if data.get("code") != 0:
+            print(f"❌ Delete record error: {data}")
+            return {"error": data.get("msg", "Unknown error")}
+        
+        return {"deleted": True, "record_id": record_id}
+
+
 # ============ HELPER FUNCTIONS ============
 def safe_extract_text(value):
     """Extract text value from Lark field (handles list, dict, string)"""
@@ -681,15 +755,112 @@ async def get_cheng_doanh_thu_records(month: int = None, week: int = None) -> Li
     return parsed
 
 
+async def get_cheng_doanh_thu_tong_records(month: int = None, week: int = None) -> List[Dict]:
+    """
+    Lấy records từ bảng CHENG - PR - Data doanh thu tổng Cheng (tuần)
+    Đây là bảng GMV chính xác theo tuần
+    
+    Fields từ screenshot:
+    - Tháng báo cáo (số: 09, 10, 11, 12)
+    - Ngày báo cáo
+    - Tuần báo cáo (Tuần 1, Tuần 2, Tuần 3, Tuần 4, Tuần 5)
+    - Ngày xuất doanh thu (1/10 - 5/10, 6/10 - 12/10, etc.)
+    - GMV (số lớn như 526,111,441.00)
+    - Nhận xét nhân sự
+    """
+    records = await get_all_records(
+        CHENG_DOANH_THU_TONG_TABLE["app_token"],
+        CHENG_DOANH_THU_TONG_TABLE["table_id"]
+    )
+    
+    print(f"📊 CHENG Doanh thu TỔNG: Total records = {len(records)}, filter month = {month}, week = {week}")
+    
+    # Debug field names
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"   🔍 CHENG DT Tổng field names: {list(first_fields.keys())}")
+    
+    parsed = []
+    
+    for r in records:
+        fields = r.get("fields", {})
+        
+        # Parse tháng
+        thang_raw = fields.get("Tháng báo cáo")
+        thang = None
+        try:
+            if isinstance(thang_raw, (int, float)):
+                thang = int(thang_raw)
+            elif isinstance(thang_raw, list) and len(thang_raw) > 0:
+                first = thang_raw[0]
+                if isinstance(first, dict):
+                    thang = int(first.get("text", 0))
+                else:
+                    thang = int(first)
+            elif isinstance(thang_raw, str):
+                match = re.search(r'\d+', thang_raw)
+                if match:
+                    thang = int(match.group())
+        except:
+            pass
+        
+        if month and thang != month:
+            continue
+        
+        # Parse tuần
+        tuan_raw = fields.get("Tuần báo cáo")
+        tuan_num = None
+        tuan_str = None
+        if tuan_raw:
+            if isinstance(tuan_raw, str):
+                tuan_str = tuan_raw
+            elif isinstance(tuan_raw, list) and len(tuan_raw) > 0:
+                first = tuan_raw[0]
+                if isinstance(first, dict):
+                    tuan_str = first.get("text") or first.get("name")
+                else:
+                    tuan_str = str(first)
+            
+            # Extract number from "Tuần 1", "Tuần 2", etc.
+            if tuan_str:
+                match = re.search(r'\d+', tuan_str)
+                if match:
+                    tuan_num = int(match.group())
+        
+        # Filter by week if specified
+        if week and tuan_num != week:
+            continue
+        
+        # Parse GMV
+        gmv = safe_number(fields.get("GMV"))
+        
+        parsed.append({
+            "record_id": r.get("record_id"),
+            "thang": thang,
+            "tuan": tuan_str,
+            "tuan_num": tuan_num,
+            "ngay_xuat_doanh_thu": fields.get("Ngày xuất doanh thu") or fields.get("Ngày xuất doanh thu"),
+            "gmv": gmv,
+            "nhan_xet": fields.get("Nhận xét nhân sự"),
+        })
+    
+    print(f"📊 CHENG DT Tổng after filter: {len(parsed)} records, total GMV = {sum(r['gmv'] for r in parsed):,.0f}")
+    
+    return parsed
+
+
 async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dict:
     """
     Tổng hợp báo cáo KOC cho CHENG
-    Updated v5.7.0: Improved logic với field names đúng
+    Updated v5.7.1: Fixed GMV từ bảng Doanh thu tổng
     """
     # Lấy dữ liệu từ các bảng Cheng
     dashboard_records = await get_cheng_dashboard_records(month=month)
     lien_he_records = await get_cheng_lien_he_records(month=month, week=week)
-    doanh_thu_records = await get_cheng_doanh_thu_records(month=month, week=week)
+    doanh_thu_koc_records = await get_cheng_doanh_thu_records(month=month, week=week)
+    
+    # LẤY GMV TỪ BẢNG DOANH THU TỔNG (mới - v5.7.1)
+    doanh_thu_tong_records = await get_cheng_doanh_thu_tong_records(month=month, week=week)
     
     # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
     # Logic: Cộng tổng KPI và Air từ tất cả sản phẩm, CHỈ LẤY TUẦN 1
@@ -784,9 +955,9 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === Top KOC doanh số ===
+    # === Top KOC doanh số (từ bảng KOC chi tiết) ===
     koc_gmv = {}
-    for r in doanh_thu_records:
+    for r in doanh_thu_koc_records:
         id_kenh = r.get("id_kenh")
         if id_kenh:
             if id_kenh not in koc_gmv:
@@ -796,12 +967,14 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
     # Sort by GMV
     top_koc = sorted(koc_gmv.items(), key=lambda x: x[1], reverse=True)[:10]
     
+    # === TÍNH GMV TỪ BẢNG DOANH THU TỔNG (chính xác) ===
+    total_gmv = sum(r.get("gmv", 0) for r in doanh_thu_tong_records)
+    
     # === Tổng quan ===
     total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
     total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
     total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
     total_ngan_sach_air = sum(d["ngan_sach_air"] for d in kpi_by_nhan_su.values())
-    total_gmv = sum(koc_gmv.values())
     
     print(f"📊 CHENG TỔNG QUAN: {total_so_luong_air}/{total_kpi_so_luong} ({round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0}%)")
     
