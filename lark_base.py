@@ -1540,20 +1540,16 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
     # Debug: in ra các field names của record đầu tiên
     if records:
         first_fields = records[0].get("fields", {})
-        print(f"   🔍 CHENG Dashboard field names: {list(first_fields.keys())[:10]}")
-        # Debug: in ra giá trị của các field tháng có thể có
-        for key in ["Tháng", "thang", "Tháng báo cáo", "Month"]:
-            if key in first_fields:
-                print(f"   🔍 Field '{key}' = {first_fields[key]}")
+        print(f"   🔍 CHENG Dashboard field names: {list(first_fields.keys())[:15]}")
     
     parsed = []
-    month_dist = {}  # Debug distribution
+    month_dist = {}
     
     for r in records:
         fields = r.get("fields", {})
         
-        # Parse tháng - thử nhiều field names có thể
-        thang_raw = fields.get("Tháng") or fields.get("thang") or fields.get("Tháng báo cáo")
+        # Parse tháng - CHENG dùng "Tháng báo cáo"
+        thang_raw = fields.get("Tháng báo cáo") or fields.get("Tháng") or fields.get("thang")
         thang = None
         try:
             if isinstance(thang_raw, list) and len(thang_raw) > 0:
@@ -1562,7 +1558,6 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
             elif isinstance(thang_raw, (int, float)):
                 thang = int(thang_raw)
             elif isinstance(thang_raw, str):
-                # Có thể là "Tháng 12" hoặc "12"
                 import re
                 match = re.search(r'\d+', thang_raw)
                 if match:
@@ -1570,20 +1565,29 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
         except:
             pass
         
-        # Debug distribution
         month_dist[thang] = month_dist.get(thang, 0) + 1
         
         if month and thang != month:
             continue
         
+        # Parse tuần - CHENG dùng "Tuần báo cáo"
+        tuan = fields.get("Tuần báo cáo") or fields.get("Tuần") or fields.get("tuan")
+        
+        # Parse nhân sự - CHENG có thể dùng "Người tạo" hoặc "Nhân sự book"
+        nhan_su = safe_extract_person_name(
+            fields.get("Nhân sự book") or 
+            fields.get("Nhân sự") or 
+            fields.get("Người tạo")
+        )
+        
         parsed.append({
             "record_id": r.get("record_id"),
             "thang": thang,
-            "tuan": fields.get("Tuần") or fields.get("tuan") or fields.get("Tuần báo cáo"),
+            "tuan": tuan,
             "san_pham": fields.get("Sản phẩm") or fields.get("san_pham"),
-            "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
-            "kpi_so_luong": fields.get("KPI - Số lượng") or fields.get("kpi_so_luong") or 0,
-            "kpi_ngan_sach": fields.get("KPI - Ngân sách") or fields.get("kpi_ngan_sach") or 0,
+            "nhan_su": nhan_su,
+            "kpi_so_luong": fields.get("KPI - Số lượng") or fields.get("KPI Số lượng") or fields.get("kpi_so_luong") or 0,
+            "kpi_ngan_sach": fields.get("KPI - Ngân sách") or fields.get("KPI ngân sách") or fields.get("kpi_ngan_sach") or 0,
             "so_luong_deal": fields.get("Số lượng - Deal") or fields.get("so_luong_deal") or 0,
             "so_luong_air": fields.get("Số lượng - Air") or fields.get("so_luong_air") or 0,
             "so_luong_tong_air": fields.get("Số lượng tổng - Air") or fields.get("so_luong_tong_air") or 0,
@@ -1608,7 +1612,7 @@ async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List
     # Debug: in ra các field names của record đầu tiên
     if records:
         first_fields = records[0].get("fields", {})
-        print(f"   🔍 CHENG Liên hệ field names: {list(first_fields.keys())[:10]}")
+        print(f"   🔍 CHENG Liên hệ field names: {list(first_fields.keys())[:15]}")
     
     parsed = []
     month_dist = {}
@@ -1616,8 +1620,8 @@ async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List
     for r in records:
         fields = r.get("fields", {})
         
-        # Parse tháng - thử nhiều field names
-        thang_raw = fields.get("Tháng") or fields.get("thang") or fields.get("Tháng báo cáo")
+        # Parse tháng - CHENG dùng "Tháng báo cáo"
+        thang_raw = fields.get("Tháng báo cáo") or fields.get("Tháng") or fields.get("thang")
         thang = None
         try:
             if isinstance(thang_raw, list) and len(thang_raw) > 0:
@@ -1638,11 +1642,18 @@ async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List
         if month and thang != month:
             continue
         
+        # Parse nhân sự - CHENG dùng "Người tạo"
+        nhan_su = safe_extract_person_name(
+            fields.get("Nhân sự") or 
+            fields.get("Người tạo") or
+            fields.get("Nhân sự book")
+        )
+        
         parsed.append({
             "record_id": r.get("record_id"),
             "thang": thang,
-            "tuan": fields.get("Tuần") or fields.get("tuan") or fields.get("Tuần báo cáo"),
-            "nhan_su": safe_extract_person_name(fields.get("Nhân sự")),
+            "tuan": fields.get("Tuần báo cáo") or fields.get("Tuần") or fields.get("tuan"),
+            "nhan_su": nhan_su,
             "tong_lien_he": fields.get("Tổng liên hệ") or fields.get("tong_lien_he") or 0,
             "da_deal": fields.get("Đã deal") or fields.get("da_deal") or 0,
             "dang_trao_doi": fields.get("Đang trao đổi") or fields.get("dang_trao_doi") or 0,
@@ -1727,14 +1738,33 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
     
     kpi_by_nhan_su = {}
     
+    # Debug: in ra sample record đầu tiên
+    if dashboard_records:
+        sample = dashboard_records[0]
+        print(f"   🔍 CHENG Dashboard sample: nhan_su={sample.get('nhan_su')}, tuan={sample.get('tuan')}, kpi_so_luong={sample.get('kpi_so_luong')}")
+    
+    # Debug: đếm số record theo tuần
+    tuan_dist = {}
+    for r in dashboard_records:
+        tuan = r.get("tuan")
+        tuan_dist[tuan] = tuan_dist.get(tuan, 0) + 1
+    print(f"   📊 CHENG Tuần distribution: {tuan_dist}")
+    
     for r in dashboard_records:
         nhan_su = r["nhan_su"]
         if nhan_su:
             nhan_su = nhan_su.strip()
         
-        # CHỈ LẤY TUẦN 1
+        # CHỈ LẤY TUẦN 1 (hoặc format tương tự)
         tuan = r.get("tuan")
-        if tuan and tuan != "Tuần 1":
+        # CHENG có thể dùng format khác: "Tuần 1", "1", "Tuần báo cáo 1", etc.
+        is_tuan_1 = False
+        if tuan:
+            tuan_str = str(tuan).lower()
+            if "1" in tuan_str and ("tuần" in tuan_str or tuan_str == "1"):
+                is_tuan_1 = True
+        
+        if tuan and not is_tuan_1:
             continue
         
         if nhan_su not in kpi_by_nhan_su:
