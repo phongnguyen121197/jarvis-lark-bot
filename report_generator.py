@@ -1,10 +1,11 @@
 """
 Report Generator Module
 Sử dụng OpenAI để sinh báo cáo đẹp từ dữ liệu
+Version 5.7.0 - Improved CHENG report formatting
 """
 import os
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from openai import AsyncOpenAI
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -154,24 +155,20 @@ Format:
 async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
     """Sinh báo cáo KOC từ dữ liệu summary (bao gồm chi phí và phân loại sản phẩm)"""
     
-    # Chuẩn bị data cho prompt
     summary = summary_data.get("summary", {})
     missing_link = summary_data.get("missing_link_kocs", [])
     missing_gio = summary_data.get("missing_gio_kocs", [])
     by_group = summary_data.get("by_group", {})
     group_label = summary_data.get("group_label", "sản phẩm")
     
-    # Format chi phí
     tong_chi_phi = summary.get("tong_chi_phi_deal", 0)
     chi_phi_formatted = f"{int(tong_chi_phi):,}".replace(",", ".") if tong_chi_phi else "0"
     
-    # Format theo group
     group_stats = []
     for name, stats in by_group.items():
         chi_phi_g = stats.get("chi_phi", 0)
         chi_phi_g_formatted = f"{int(chi_phi_g):,}".replace(",", ".") if chi_phi_g else "0"
         
-        # Lấy danh sách KOC chưa air hoặc cần follow-up
         kocs_in_g = stats.get("kocs", [])
         kocs_chua_air = [k.get("id_koc") for k in kocs_in_g if not k.get("da_air")][:3]
         
@@ -184,14 +181,11 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
             "kocs_chua_air": kocs_chua_air
         })
     
-    # Sort by count descending
     group_stats.sort(key=lambda x: x["count"], reverse=True)
     
-    # Lấy danh sách KOC cụ thể cần follow-up
     kocs_can_link = [k.get("id_koc") or k.get("id_kenh") for k in missing_link[:5] if k.get("id_koc") or k.get("id_kenh")]
     kocs_can_gio = [k.get("id_koc") or k.get("id_kenh") for k in missing_gio[:5] if k.get("id_koc") or k.get("id_kenh")]
     
-    # Tính toán metrics cho Brand Manager phân tích
     total = summary.get("total", 0)
     da_air = summary.get("da_air", 0)
     ty_le_air = round((da_air / total * 100), 1) if total > 0 else 0
@@ -201,7 +195,7 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
     data_for_prompt = {
         "month": summary_data.get("month"),
         "week": summary_data.get("week"),
-        "group_label": group_label,  # "sản phẩm" hoặc "phân loại sản phẩm"
+        "group_label": group_label,
         "total": total,
         "da_air": da_air,
         "chua_air": summary.get("chua_air", 0),
@@ -210,7 +204,7 @@ async def generate_koc_report_text(summary_data: Dict[str, Any]) -> str:
         "tong_chi_phi_deal": chi_phi_formatted,
         "ty_le_air_percent": ty_le_air,
         "chi_phi_trung_binh_per_koc": chi_phi_tb_formatted,
-        "theo_group": group_stats,  # Data theo group_by
+        "theo_group": group_stats,
         "kocs_can_cap_nhat_link": kocs_can_link,
         "kocs_can_gan_gio": kocs_can_gio,
     }
@@ -281,7 +275,6 @@ async def generate_task_summary_text(task_data: Dict[str, Any]) -> str:
     sap_deadline_tasks = task_data.get("sap_deadline_tasks", [])
     month = task_data.get("month")
     
-    # Format data theo vị trí
     vi_tri_stats = []
     for vt, stats in by_vi_tri.items():
         vi_tri_stats.append({
@@ -291,7 +284,6 @@ async def generate_task_summary_text(task_data: Dict[str, Any]) -> str:
             "sap_deadline": stats.get("sap_deadline", 0)
         })
     
-    # Sort by total descending
     vi_tri_stats.sort(key=lambda x: x["total"], reverse=True)
     
     data_for_prompt = {
@@ -368,11 +360,9 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
     
     week_text = f" tuần {week}" if week else ""
     
-    # Format chi phí
     tong_chi_phi = summary.get("tong_chi_phi_deal", 0)
     chi_phi_formatted = f"{int(tong_chi_phi):,}".replace(",", ".") if tong_chi_phi else "0"
     
-    # Tính metrics
     total = summary.get('total', 0)
     da_air = summary.get('da_air', 0)
     ty_le_air = round((da_air / total * 100), 1) if total > 0 else 0
@@ -391,7 +381,6 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
 • Tổng chi phí deal: {chi_phi_formatted} VNĐ
 • Chi phí trung bình/KOC: {chi_phi_tb_fmt} VNĐ"""
     
-    # Thêm thống kê theo group
     if by_group:
         text += f"\n\n📦 Theo {group_label}:"
         sorted_g = sorted(by_group.items(), key=lambda x: x[1].get("count", 0), reverse=True)
@@ -400,7 +389,6 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
             chi_phi_g_fmt = f"{int(chi_phi_g):,}".replace(",", ".") if chi_phi_g else "0"
             text += f"\n• {name}: {stats.get('count', 0)} KOC ({chi_phi_g_fmt} VNĐ)"
     
-    # Nhận xét Brand Manager (simple version)
     text += "\n\n💼 Nhận xét từ Brand Manager:"
     if ty_le_air >= 90:
         text += f"\n• Tỷ lệ air {ty_le_air}% rất tốt, chiến dịch đang đi đúng hướng"
@@ -413,7 +401,6 @@ def format_koc_report_simple(summary_data: Dict[str, Any]) -> str:
     if chua_gan_gio > 0:
         text += f"\n• ⚠️ {chua_gan_gio} KOC chưa gắn giỏ = mất cơ hội chuyển đổi"
     
-    # Đề xuất CỤ THỂ với tên KOC
     if summary.get('da_air_chua_link', 0) > 0 or summary.get('da_air_chua_gan_gio', 0) > 0:
         text += "\n\n🎯 Đề xuất hành động:"
         
@@ -473,15 +460,7 @@ def format_task_summary_simple(task_data: Dict[str, Any]) -> str:
 
 # ============ GPT CHAT ============
 async def chat_with_gpt(question: str) -> str:
-    """
-    Gửi câu hỏi trực tiếp đến ChatGPT và nhận câu trả lời.
-    
-    Args:
-        question: Câu hỏi của user
-    
-    Returns:
-        Câu trả lời từ GPT
-    """
+    """Gửi câu hỏi trực tiếp đến ChatGPT"""
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -536,13 +515,11 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
     top_koc = data.get("top_koc", [])
     lien_he_nhan_su = data.get("lien_he_nhan_su", {})
     
-    # Lấy ngày hiện tại để kiểm tra cảnh báo
     current_day = datetime.now().day
     current_month = datetime.now().month
     is_after_15 = current_day > 15
     is_current_month = (month == current_month)
     
-    # Header
     time_label = f"Tháng {month}" if month else "Tổng hợp"
     if week:
         time_label += f" - {week}"
@@ -553,7 +530,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
     if report_type == "kpi_ca_nhan" and nhan_su_filter:
         lines.append(f"👤 **KPI CÁ NHÂN - {time_label.upper()}**\n")
         
-        # Tìm nhân sự trong data (fuzzy match)
         matched_ns = None
         matched_kpi = None
         matched_lh = None
@@ -589,7 +565,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
             ns_air = matched_kpi.get("ngan_sach_air", 0)
             kpi_ns = matched_kpi.get("kpi_ngan_sach", 0)
             
-            # Performance emoji
             if pct_sl >= 50:
                 status = "🟢 Đang trên tiến độ"
             elif pct_sl >= 20:
@@ -607,7 +582,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
             lines.append(f"   • Đã air: {format_currency(ns_air)}/{format_currency(kpi_ns)}")
             lines.append(f"   • Tiến độ: {pct_ns}%\n")
             
-            # Cảnh báo nếu qua ngày 15 mà KPI < 50%
             if is_after_15 and is_current_month and pct_sl < 50:
                 lines.append(f"⚠️ **CẢNH BÁO:** Đã qua ngày 15, KPI mới đạt {pct_sl}%!")
                 remaining_days = 30 - current_day
@@ -642,7 +616,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
         
         lines.append(f"📅 Hôm nay là ngày {current_day}, đã qua mốc kiểm tra ngày 15.\n")
         
-        # Tìm nhân sự có KPI < 50%
         warning_list = []
         ok_list = []
         
@@ -685,24 +658,20 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
         lines.append("📈 **TỔNG QUAN KPI**")
         lines.append("═══════════════════════════")
         
-        # KPI Số lượng
         kpi_sl = tong_quan.get("kpi_so_luong", 0)
         sl_air = tong_quan.get("so_luong_air", 0)
         pct_sl = tong_quan.get("pct_kpi_so_luong", 0)
         lines.append(f"📦 Số lượng Air: {sl_air}/{kpi_sl} ({pct_sl}%)")
         
-        # KPI Ngân sách
         kpi_ns = tong_quan.get("kpi_ngan_sach", 0)
         ns_air = tong_quan.get("ngan_sach_air", 0)
         pct_ns = tong_quan.get("pct_kpi_ngan_sach", 0)
         lines.append(f"💰 Ngân sách Air: {format_currency(ns_air)}/{format_currency(kpi_ns)} ({pct_ns}%)")
         
-        # Total GMV
         total_gmv = tong_quan.get("total_gmv", 0)
         if total_gmv > 0:
             lines.append(f"🏆 Tổng GMV KOC: {format_currency(total_gmv)}")
         
-        # Cảnh báo tổng quan nếu qua ngày 15 mà KPI < 50%
         if is_after_15 and is_current_month and pct_sl < 50:
             lines.append(f"\n⚠️ **CẢNH BÁO:** Đã qua ngày 15, KPI tổng mới đạt {pct_sl}%!")
         
@@ -714,7 +683,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
         lines.append("👥 **KPI THEO NHÂN SỰ**")
         lines.append("═══════════════════════════")
         
-        # Sắp xếp theo % KPI số lượng giảm dần
         sorted_ns = sorted(kpi_nhan_su.items(), key=lambda x: x[1].get("pct_kpi_so_luong", 0), reverse=True)
         
         warning_count = 0
@@ -726,7 +694,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
             sl_air = kpi.get("so_luong_air", 0)
             kpi_sl = kpi.get("kpi_so_luong", 0)
             
-            # Emoji dựa trên performance
             if pct_sl >= 50:
                 emoji = "🟢"
             elif pct_sl >= 20:
@@ -765,7 +732,6 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
         lines.append("📞 **TỶ LỆ LIÊN HỆ NHÂN SỰ**")
         lines.append("═══════════════════════════")
         
-        # Sắp xếp theo tổng liên hệ giảm dần
         sorted_lh = sorted(lien_he_nhan_su.items(), key=lambda x: x[1].get("tong_lien_he", 0), reverse=True)
         
         for nhan_su, lh in sorted_lh:
@@ -784,17 +750,20 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
         
         lines.append("")
     
-    # Footer
     lines.append("───────────────────────────")
     lines.append("💡 Tip: Hỏi \"KPI của Mai\" hoặc \"Cảnh báo KPI\" để xem chi tiết")
     
     return "\n".join(lines)
 
 
-# ============ CHENG REPORT ============
+# ============ CHENG REPORT (Updated v5.7.0) ============
 
 async def generate_cheng_report_text(summary_data: Dict[str, Any]) -> str:
-    """Sinh báo cáo KOC cho CHENG từ dữ liệu summary"""
+    """
+    Sinh báo cáo KOC cho CHENG từ dữ liệu summary
+    Updated v5.7.0: Improved formatting với data mới
+    """
+    from datetime import datetime
     
     tong_quan = summary_data.get("tong_quan", {})
     kpi_nhan_su = summary_data.get("kpi_nhan_su", {})
@@ -806,11 +775,12 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any]) -> str:
     lines = []
     
     # Header
-    lines.append("🧴 **BÁO CÁO KOC - CHENG**")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("🧴 **BÁO CÁO KOC - CHENG LOVE HAIR**")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     
     week_text = f" - Tuần {week}" if week else ""
     lines.append(f"📅 Tháng {month}{week_text}")
+    lines.append(f"🕐 Cập nhật: {datetime.now().strftime('%H:%M %d/%m/%Y')}")
     lines.append("")
     
     # === TỔNG QUAN KPI ===
@@ -827,92 +797,115 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any]) -> str:
     
     total_gmv = tong_quan.get("total_gmv", 0)
     
-    # Format số
-    kpi_ns_fmt = f"{kpi_ns:,.0f}".replace(",", ".")
-    ns_air_fmt = f"{ns_air:,.0f}".replace(",", ".")
-    gmv_fmt = f"{total_gmv:,.0f}".replace(",", ".")
+    lines.append(f"📦 **Số lượng:** {sl_air}/{kpi_sl} video ({pct_sl}%)")
+    lines.append(f"💰 **Ngân sách:** {format_currency(ns_air)}/{format_currency(kpi_ns)} ({pct_ns}%)")
     
-    lines.append(f"📦 Số lượng: **{sl_air}/{kpi_sl}** ({pct_sl}%)")
-    lines.append(f"💰 Ngân sách: **{ns_air_fmt}/{kpi_ns_fmt}** VND ({pct_ns}%)")
-    lines.append(f"📈 GMV KOC: **{gmv_fmt}** VND")
+    if total_gmv > 0:
+        lines.append(f"📈 **GMV KOC:** {format_currency(total_gmv)}")
+    
+    # Progress bar visual
+    progress_filled = int(pct_sl / 10)
+    progress_empty = 10 - progress_filled
+    progress_bar = "▓" * progress_filled + "░" * progress_empty
+    lines.append(f"📊 [{progress_bar}] {pct_sl}%")
     lines.append("")
     
     # === KPI THEO NHÂN SỰ ===
-    lines.append("👥 **KPI THEO NHÂN SỰ**")
-    lines.append("───────────────────────────")
-    
-    # Sort theo % KPI số lượng
-    sorted_nhan_su = sorted(
-        kpi_nhan_su.items(), 
-        key=lambda x: x[1].get("pct_kpi_so_luong", 0), 
-        reverse=True
-    )
-    
-    for nhan_su, data in sorted_nhan_su:
-        if not nhan_su:
-            continue
-            
-        sl_air = data.get("so_luong_air", 0)
-        kpi_sl = data.get("kpi_so_luong", 0)
-        pct_sl = data.get("pct_kpi_so_luong", 0)
-        pct_ns = data.get("pct_kpi_ngan_sach", 0)
-        
-        # Emoji theo tiến độ
-        if pct_sl >= 100:
-            emoji = "🏆"
-        elif pct_sl >= 70:
-            emoji = "✅"
-        elif pct_sl >= 50:
-            emoji = "🔶"
-        else:
-            emoji = "⚠️"
-        
-        # Rút gọn tên
-        short_name = nhan_su.split(" - ")[0] if " - " in nhan_su else nhan_su
-        if len(short_name) > 15:
-            short_name = short_name[:12] + "..."
-        
-        lines.append(f"{emoji} **{short_name}**: {sl_air}/{kpi_sl} ({pct_sl}%) | NS: {pct_ns}%")
-    
-    lines.append("")
-    
-    # === LIÊN HỆ THEO NHÂN SỰ ===
-    if lien_he_nhan_su:
-        lines.append("📞 **LIÊN HỆ THEO NHÂN SỰ**")
+    if kpi_nhan_su:
+        lines.append("👥 **KPI THEO NHÂN SỰ**")
         lines.append("───────────────────────────")
         
-        for nhan_su, data in lien_he_nhan_su.items():
-            if not nhan_su:
+        # Sort theo % KPI số lượng giảm dần
+        sorted_nhan_su = sorted(
+            kpi_nhan_su.items(), 
+            key=lambda x: x[1].get("pct_kpi_so_luong", 0), 
+            reverse=True
+        )
+        
+        for nhan_su, data in sorted_nhan_su:
+            if not nhan_su or nhan_su == "Không xác định":
                 continue
+                
+            sl_air = data.get("so_luong_air", 0)
+            kpi_sl = data.get("kpi_so_luong", 0)
+            pct_sl = data.get("pct_kpi_so_luong", 0)
+            pct_ns = data.get("pct_kpi_ngan_sach", 0)
             
-            total = data.get("tong", 0)
-            deal = data.get("deal", 0)
-            ty_le_deal = data.get("ty_le_deal", 0)
+            # Emoji theo tiến độ
+            if pct_sl >= 100:
+                emoji = "🏆"
+            elif pct_sl >= 70:
+                emoji = "🟢"
+            elif pct_sl >= 50:
+                emoji = "🟡"
+            elif pct_sl >= 20:
+                emoji = "🟠"
+            else:
+                emoji = "🔴"
             
+            # Rút gọn tên nếu quá dài
             short_name = nhan_su.split(" - ")[0] if " - " in nhan_su else nhan_su
-            if len(short_name) > 15:
-                short_name = short_name[:12] + "..."
+            if len(short_name) > 20:
+                short_name = short_name[:17] + "..."
             
-            lines.append(f"👤 {short_name}: {total} liên hệ | Deal: {deal} ({ty_le_deal}%)")
+            lines.append(f"{emoji} **{short_name}**: {sl_air}/{kpi_sl} ({pct_sl}%) | NS: {pct_ns}%")
         
         lines.append("")
     
-    # === TOP KOC ===
-    if top_koc:
-        lines.append("🌟 **TOP KOC THEO GMV**")
+    # === LIÊN HỆ THEO NHÂN SỰ ===
+    if lien_he_nhan_su:
+        lines.append("📞 **LIÊN HỆ KOC**")
         lines.append("───────────────────────────")
         
-        for i, koc in enumerate(top_koc[:5], 1):
-            name = koc.get("name", "N/A")
-            gmv = koc.get("gmv", 0)
-            gmv_fmt = f"{gmv:,.0f}".replace(",", ".")
-            lines.append(f"{i}. {name}: {gmv_fmt} VND")
+        # Sort theo tổng liên hệ
+        sorted_lh = sorted(
+            lien_he_nhan_su.items(),
+            key=lambda x: x[1].get("tong_lien_he", 0),
+            reverse=True
+        )
+        
+        for nhan_su, data in sorted_lh:
+            if not nhan_su or nhan_su == "Không xác định":
+                continue
+            
+            tong = data.get("tong_lien_he", 0)
+            if tong == 0:
+                continue
+            
+            da_deal = data.get("da_deal", 0)
+            ty_le_deal = data.get("ty_le_deal", 0)
+            ty_le_trao_doi = data.get("ty_le_trao_doi", 0)
+            ty_le_tu_choi = data.get("ty_le_tu_choi", 0)
+            
+            short_name = nhan_su.split(" - ")[0] if " - " in nhan_su else nhan_su
+            if len(short_name) > 20:
+                short_name = short_name[:17] + "..."
+            
+            lines.append(f"👤 **{short_name}** ({tong} liên hệ)")
+            lines.append(f"   ✅ Deal: {da_deal} ({ty_le_deal}%) | 💬 Trao đổi: {ty_le_trao_doi}% | ❌ Từ chối: {ty_le_tu_choi}%")
+        
+        lines.append("")
+    
+    # === TOP KOC DOANH SỐ ===
+    if top_koc:
+        lines.append("🌟 **TOP KOC DOANH SỐ**")
+        lines.append("───────────────────────────")
+        
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (koc_id, gmv) in enumerate(top_koc[:5]):
+            if i < 3:
+                prefix = medals[i]
+            else:
+                prefix = f"{i+1}."
+            
+            gmv_fmt = format_currency(gmv)
+            lines.append(f"{prefix} @{koc_id}: {gmv_fmt}")
         
         lines.append("")
     
     # Footer
     lines.append("───────────────────────────")
-    lines.append("🧴 Cheng Love Hair | Báo cáo tự động")
+    lines.append("🧴 **Cheng Love Hair** | Báo cáo tự động bởi Jarvis")
+    lines.append("💡 Tip: Hỏi \"KPI của [tên]\" để xem chi tiết cá nhân")
     
     return "\n".join(lines)
-

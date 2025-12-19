@@ -1,6 +1,7 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
+Version 5.7.0 - Fixed CHENG field names
 """
 import os
 import re
@@ -27,60 +28,71 @@ TASK_BASE = {
 
 # Bảng Dashboard KOC - cùng Base với Booking nhưng khác table
 DASHBOARD_KOC_BASE = {
-    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",  # Giống Booking
-    "table_id": "blko05Rb76NGi5nd"  # Table mới từ URL
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
+    "table_id": "blko05Rb76NGi5nd"
 }
 
 # === KALLE DASHBOARD TABLES ===
 DASHBOARD_THANG_TABLE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
-    "table_id": "tblhf6x9hciClWGz"  # KALLE - DASHBOARD THÁNG
+    "table_id": "tblhf6x9hciClWGz"
 }
 
 DOANH_THU_KOC_TABLE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
-    "table_id": "tbl2TQywnQTYxpNj"  # KALLE - PR - Data doanh thu Koc (tuần)
+    "table_id": "tbl2TQywnQTYxpNj"
 }
 
 LIEN_HE_TUAN_TABLE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
-    "table_id": "tbl18EP44c0MAnKR"  # KALLE - PR - Data liên hệ (tuần)
+    "table_id": "tbl18EP44c0MAnKR"
 }
 
 KALODATA_TABLE = {
     "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",
-    "table_id": "tblX6CB3BshhwloA"  # KALLE- PR - Data Kalodata
+    "table_id": "tblX6CB3BshhwloA"
 }
 
-# === CHENG BASE (MỚI) ===
+# === CHENG BASE ===
 CHENG_BASE = {
     "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
 }
 
 CHENG_BOOKING_TABLE = {
     "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
-    "table_id": "tblB2pmRRoMA1IzO"  # CHENG - PR - Data list booking (ngày)
+    "table_id": "tblB2pmRRoMA1IzO"
 }
 
 CHENG_LIEN_HE_TABLE = {
     "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
-    "table_id": "tbl6DXM3ZCTQrEm2"  # CHENG - PR - Data liên hệ (tuần)
+    "table_id": "tbl6DXM3ZCTQrEm2"
 }
 
 CHENG_DOANH_THU_KOC_TABLE = {
     "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
-    "table_id": "tbl1xp8cdxzeccoM"  # CHENG - PR - Data doanh thu Koc (tuần)
+    "table_id": "tbl1xp8cdxzeccoM"
 }
 
 CHENG_DOANH_THU_TONG_TABLE = {
     "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
-    "table_id": "tblbOLW7wp2713M6"  # CHENG - PR - Data doanh thu tổng Cheng (tuần)
+    "table_id": "tblbOLW7wp2713M6"
 }
 
 CHENG_DASHBOARD_THANG_TABLE = {
     "app_token": "QRRwboNSqaBSXhshmzHlCf0EgRc",
-    "table_id": "tblhfbIOby6kDYnx"  # CHENG - DASHBOARD THÁNG
+    "table_id": "tblhfbIOby6kDYnx"
 }
+
+# === NOTES TABLE (Persistent Storage) ===
+# Bảng Notes riêng - để lưu ghi chú của users
+# Link: https://chenglovehair.sg.larksuite.com/base/XfHGbvXrRaK1zcsTZ1zl5QR3ghf
+NOTES_TABLE = {
+    "app_token": "XfHGbvXrRaK1zcsTZ1zl5QR3ghf",  # Jarvis Notes Base
+    "table_id": "tbl6LiH9n7xs4VMs"  # Bảng Jarvis Notes
+}
+
+# === CALENDAR CONFIG ===
+JARVIS_CALENDAR_ID = "7585485663517069021"
 
 # ============ AUTH ============
 _token_cache = {
@@ -92,12 +104,10 @@ async def get_tenant_access_token() -> str:
     """Lấy tenant access token từ Lark (có cache)"""
     now = datetime.now()
     
-    # Check cache
     if _token_cache["token"] and _token_cache["expires_at"]:
         if now < _token_cache["expires_at"]:
             return _token_cache["token"]
     
-    # Get new token
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{LARK_API_BASE}/auth/v3/tenant_access_token/internal",
@@ -112,7 +122,6 @@ async def get_tenant_access_token() -> str:
             token = data.get("tenant_access_token")
             expire = data.get("expire", 7200)
             
-            # Cache token (với buffer 5 phút)
             _token_cache["token"] = token
             _token_cache["expires_at"] = now + timedelta(seconds=expire - 300)
             
@@ -128,19 +137,7 @@ async def get_table_records(
     page_size: int = 100,
     page_token: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Lấy records từ Lark Base table
-    
-    Args:
-        app_token: Base app token
-        table_id: Table ID
-        filter_formula: Công thức filter (optional)
-        page_size: Số records mỗi trang (max 500)
-        page_token: Token để lấy trang tiếp theo
-    
-    Returns:
-        Dict chứa items và page info
-    """
+    """Lấy records từ Lark Base table"""
     token = await get_tenant_access_token()
     
     url = f"{LARK_API_BASE}/bitable/v1/apps/{app_token}/tables/{table_id}/records"
@@ -176,9 +173,7 @@ async def get_all_records(
     filter_formula: Optional[str] = None,
     max_records: int = 2000
 ) -> List[Dict[str, Any]]:
-    """
-    Lấy tất cả records (với pagination)
-    """
+    """Lấy tất cả records (với pagination)"""
     all_records = []
     page_token = None
     
@@ -187,14 +182,13 @@ async def get_all_records(
             app_token=app_token,
             table_id=table_id,
             filter_formula=filter_formula,
-            page_size=500,  # Max allowed by API
+            page_size=500,
             page_token=page_token
         )
         
         items = result.get("items", [])
         all_records.extend(items)
         
-        # Check if more pages
         if not result.get("has_more"):
             break
         
@@ -202,15 +196,62 @@ async def get_all_records(
     
     return all_records[:max_records]
 
-# ============ BOOKING/KOC HELPERS ============
+# ============ HELPER FUNCTIONS ============
+def safe_extract_text(value):
+    """Extract text value from Lark field (handles list, dict, string)"""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, list) and len(value) > 0:
+        first = value[0]
+        if isinstance(first, dict):
+            return first.get("text") or first.get("name") or first.get("value")
+        return str(first)
+    if isinstance(value, dict):
+        return value.get("text") or value.get("name") or value.get("value")
+    return str(value)
+
+
+def safe_extract_person_name(value):
+    """Extract person name from Lark person field"""
+    if value is None:
+        return "Không xác định"
+    if isinstance(value, list) and len(value) > 0:
+        first = value[0]
+        if isinstance(first, dict):
+            return first.get("name") or first.get("en_name") or "Không xác định"
+    if isinstance(value, dict):
+        return value.get("name") or value.get("en_name") or "Không xác định"
+    return str(value)
+
+
+def safe_number(val, default=0):
+    """Safely convert value to number"""
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return val
+    if isinstance(val, str):
+        try:
+            # Remove commas and dots used as thousand separators
+            cleaned = val.replace(",", "").replace(" ", "")
+            return float(cleaned)
+        except:
+            return default
+    if isinstance(val, list) and len(val) > 0:
+        return safe_number(val[0], default)
+    if isinstance(val, dict):
+        return safe_number(val.get("value") or val.get("text"), default)
+    return default
+
+
 def find_phan_loai_field(fields: Dict) -> Optional[str]:
-    """
-    Tìm field phân loại sản phẩm trong record.
-    Thử nhiều tên có thể: "Phân loại sp", "Phân loại sản phẩm", etc.
-    """
-    # Danh sách các tên field có thể (ưu tiên exact match)
+    """Tìm field phân loại sản phẩm trong record."""
     possible_names = [
-        "Phân loại sp (Chỉ được chọn - Không được add mới)",  # Tên chính xác
+        "Phân loại sp (Chỉ được chọn - Không được add mới)",
         "Phân loại sản phẩm",
         "Phân loại sp",
         "Phan loai san pham",
@@ -219,13 +260,11 @@ def find_phan_loai_field(fields: Dict) -> Optional[str]:
     
     value = None
     
-    # Thử tìm exact match trước
     for name in possible_names:
         if name in fields:
             value = fields.get(name)
             break
     
-    # Nếu chưa tìm thấy, thử tìm field có chứa "phân loại"
     if value is None:
         for key in fields.keys():
             key_lower = key.lower()
@@ -233,7 +272,6 @@ def find_phan_loai_field(fields: Dict) -> Optional[str]:
                 value = fields.get(key)
                 break
     
-    # Xử lý giá trị - có thể là list, dict, hoặc string
     if value is None:
         return None
     
@@ -241,7 +279,6 @@ def find_phan_loai_field(fields: Dict) -> Optional[str]:
         return value
     
     if isinstance(value, list):
-        # Nếu là list, lấy phần tử đầu tiên
         if len(value) > 0:
             first = value[0]
             if isinstance(first, dict):
@@ -262,29 +299,22 @@ def extract_field_value(fields: Dict, field_name: str, default=None):
     if value is None:
         return default
     
-    # Text field
     if isinstance(value, str):
         return value
     
-    # Number field
     if isinstance(value, (int, float)):
         return value
     
-    # List/Array field (như Select, Multi-select)
     if isinstance(value, list):
         if len(value) == 0:
             return default
-        # Nếu là list of dicts (như Person field)
         if isinstance(value[0], dict):
             return [v.get("text", v.get("name", str(v))) for v in value]
         return value
     
-    # Dict field (như Date, Link)
     if isinstance(value, dict):
-        # Date field
         if "date" in value:
             return value.get("date")
-        # Link field
         if "link" in value:
             return value.get("link")
         if "text" in value:
@@ -293,23 +323,515 @@ def extract_field_value(fields: Dict, field_name: str, default=None):
     
     return value
 
+
+# ============ CHENG FUNCTIONS (UPDATED v5.7.0) ============
+
+async def get_cheng_booking_records(month: int = None, week: int = None) -> List[Dict]:
+    """Lấy danh sách booking từ bảng CHENG"""
+    records = await get_all_records(
+        CHENG_BOOKING_TABLE["app_token"],
+        CHENG_BOOKING_TABLE["table_id"]
+    )
+    
+    print(f"📋 CHENG Booking: Total records = {len(records)}, filter month = {month}, week = {week}")
+    
+    if not month and not week:
+        return records
+    
+    filtered = []
+    month_dist = {}
+    
+    for record in records:
+        fields = record.get("fields", {})
+        
+        thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
+        thang_du_kien = None
+        
+        try:
+            if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
+                first = thang_du_kien_raw[0]
+                thang_du_kien = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+            elif isinstance(thang_du_kien_raw, (int, float)):
+                thang_du_kien = int(thang_du_kien_raw)
+            elif isinstance(thang_du_kien_raw, str):
+                thang_du_kien = int(thang_du_kien_raw)
+        except:
+            pass
+        
+        if thang_du_kien:
+            month_dist[thang_du_kien] = month_dist.get(thang_du_kien, 0) + 1
+        
+        if month and thang_du_kien != month:
+            continue
+        
+        filtered.append(record)
+    
+    print(f"📋 CHENG Month distribution: {month_dist}")
+    print(f"📋 CHENG After filter: {len(filtered)} records")
+    
+    return filtered
+
+
+async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
+    """
+    Lấy records từ bảng CHENG - DASHBOARD THÁNG
+    Updated v5.7.0: Fixed field names based on actual screenshots
+    
+    Fields từ screenshot:
+    - Tháng báo cáo (số: 12)
+    - Ngày báo cáo (08/12/2025)
+    - Tuần báo cáo (Tuần 1)
+    - Nhân sự book (Person field)
+    - Sản phẩm (Nhuộm bột, Ủ tóc, etc.)
+    - KPI Số lượng, Số lượng, % KPI Số lượng
+    - KPI ngân sách, Ngân sách tổng - Deal, Ngân sách tổng - Air
+    - Số lượng - Deal, Ngân sách - Deal (TUẦN)
+    - Số lượng - Air, Ngân sách - Air (TUẦN)
+    """
+    records = await get_all_records(
+        CHENG_DASHBOARD_THANG_TABLE["app_token"],
+        CHENG_DASHBOARD_THANG_TABLE["table_id"]
+    )
+    
+    print(f"📊 CHENG Dashboard: Total records = {len(records)}, filter month = {month}")
+    
+    # Debug: in ra các field names của record đầu tiên
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"   🔍 CHENG Dashboard field names: {list(first_fields.keys())[:20]}")
+        print(f"   🔍 Sample Tháng báo cáo: {first_fields.get('Tháng báo cáo')}")
+        print(f"   🔍 Sample Tuần báo cáo: {first_fields.get('Tuần báo cáo')}")
+        print(f"   🔍 Sample Nhân sự book: {first_fields.get('Nhân sự book')}")
+    
+    parsed = []
+    month_dist = {}
+    
+    for r in records:
+        fields = r.get("fields", {})
+        
+        # Parse tháng - "Tháng báo cáo" là số nguyên (12)
+        thang_raw = fields.get("Tháng báo cáo")
+        thang = None
+        try:
+            if isinstance(thang_raw, (int, float)):
+                thang = int(thang_raw)
+            elif isinstance(thang_raw, list) and len(thang_raw) > 0:
+                first = thang_raw[0]
+                if isinstance(first, dict):
+                    thang = int(first.get("text", 0))
+                else:
+                    thang = int(first)
+            elif isinstance(thang_raw, str):
+                match = re.search(r'\d+', thang_raw)
+                if match:
+                    thang = int(match.group())
+        except:
+            pass
+        
+        month_dist[thang] = month_dist.get(thang, 0) + 1
+        
+        if month and thang != month:
+            continue
+        
+        # Parse tuần - "Tuần báo cáo" có thể là "Tuần 1" hoặc object
+        tuan_raw = fields.get("Tuần báo cáo")
+        tuan = None
+        if isinstance(tuan_raw, str):
+            tuan = tuan_raw
+        elif isinstance(tuan_raw, list) and len(tuan_raw) > 0:
+            first = tuan_raw[0]
+            if isinstance(first, dict):
+                tuan = first.get("text") or first.get("name")
+            else:
+                tuan = str(first)
+        elif isinstance(tuan_raw, dict):
+            tuan = tuan_raw.get("text") or tuan_raw.get("name")
+        
+        # Parse nhân sự - "Nhân sự book" (Person field)
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+        
+        # Parse sản phẩm
+        san_pham_raw = fields.get("Sản phẩm")
+        san_pham = None
+        if isinstance(san_pham_raw, str):
+            san_pham = san_pham_raw
+        elif isinstance(san_pham_raw, list) and len(san_pham_raw) > 0:
+            first = san_pham_raw[0]
+            if isinstance(first, dict):
+                san_pham = first.get("text") or first.get("name")
+            else:
+                san_pham = str(first)
+        
+        parsed.append({
+            "record_id": r.get("record_id"),
+            "thang": thang,
+            "tuan": tuan,
+            "san_pham": san_pham,
+            "nhan_su": nhan_su,
+            # KPI targets (THÁNG)
+            "kpi_so_luong": safe_number(fields.get("KPI Số lượng") or fields.get("KPI số lượng")),
+            "kpi_ngan_sach": safe_number(fields.get("KPI ngân sách")),
+            # Số lượng thực tế (THÁNG)
+            "so_luong": safe_number(fields.get("Số lượng")),
+            "pct_kpi_so_luong": safe_number(fields.get("% KPI Số lượng") or fields.get("% KPI số lượng")),
+            # Ngân sách thực tế (THÁNG)
+            "ngan_sach_tong_deal": safe_number(fields.get("Ngân sách tổng - Deal")),
+            "ngan_sach_tong_air": safe_number(fields.get("Ngân sách tổng - Air")),
+            "pct_kpi_ngan_sach": safe_number(fields.get("% KPI Ngân sách") or fields.get("% KPI ngân sách")),
+            # DEAL - TUẦN
+            "so_luong_deal": safe_number(fields.get("Số lượng - Deal")),
+            "pct_so_luong_deal": safe_number(fields.get("% số lượng - Deal") or fields.get("% Số lượng - Deal")),
+            "ngan_sach_deal": safe_number(fields.get("Ngân sách - Deal")),
+            "pct_ngan_sach_deal": safe_number(fields.get("% Ngân sách - Deal")),
+            # ĐÃ AIR - TUẦN
+            "so_luong_air": safe_number(fields.get("Số lượng - Air")),
+            "pct_so_luong_air": safe_number(fields.get("% Số lượng - Air") or fields.get("% số lượng - Air")),
+            "ngan_sach_air": safe_number(fields.get("Ngân sách - Air")),
+            "pct_ngan_sach_air": safe_number(fields.get("% Ngân sách - Air")),
+            # Số lượng tổng - dùng "Số lượng tổng - Air" hoặc fallback về "Số lượng - Air"
+            "so_luong_tong_air": safe_number(fields.get("Số lượng tổng - Air") or fields.get("Số lượng - Air")),
+        })
+    
+    print(f"   📊 CHENG Month distribution: {month_dist}")
+    print(f"📊 CHENG Dashboard after filter: {len(parsed)} records")
+    return parsed
+
+
+async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List[Dict]:
+    """
+    Lấy records từ bảng CHENG - PR - Data liên hệ (tuần)
+    Updated v5.7.0: Fixed field names based on actual screenshots
+    
+    Fields từ screenshot:
+    - Ngày báo cáo
+    - Tháng báo cáo (số: 12)
+    - Tuần báo cáo (Tuần 1)
+    - Thời gian tuần (1/12 - 7/12)
+    - Người tạo (Person field)
+    - # Đã deal, Tỷ lệ đã deal
+    - # Đang trao đổi, Tỷ lệ đang trao đổi
+    - # Từ chối, Tỷ lệ từ chối
+    - Không phản hồi khi nhắn, Không phản hồi từ đầu
+    - Tổng liên hệ
+    """
+    records = await get_all_records(
+        CHENG_LIEN_HE_TABLE["app_token"],
+        CHENG_LIEN_HE_TABLE["table_id"]
+    )
+    
+    print(f"📞 CHENG Liên hệ: Total records = {len(records)}, filter month = {month}")
+    
+    # Debug field names
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"   🔍 CHENG Liên hệ field names: {list(first_fields.keys())[:20]}")
+    
+    parsed = []
+    month_dist = {}
+    
+    for r in records:
+        fields = r.get("fields", {})
+        
+        # Parse tháng
+        thang_raw = fields.get("Tháng báo cáo")
+        thang = None
+        try:
+            if isinstance(thang_raw, (int, float)):
+                thang = int(thang_raw)
+            elif isinstance(thang_raw, list) and len(thang_raw) > 0:
+                first = thang_raw[0]
+                if isinstance(first, dict):
+                    thang = int(first.get("text", 0))
+                else:
+                    thang = int(first)
+            elif isinstance(thang_raw, str):
+                match = re.search(r'\d+', thang_raw)
+                if match:
+                    thang = int(match.group())
+        except:
+            pass
+        
+        month_dist[thang] = month_dist.get(thang, 0) + 1
+        
+        if month and thang != month:
+            continue
+        
+        # Parse tuần
+        tuan_raw = fields.get("Tuần báo cáo")
+        tuan = None
+        if isinstance(tuan_raw, str):
+            tuan = tuan_raw
+        elif isinstance(tuan_raw, list) and len(tuan_raw) > 0:
+            first = tuan_raw[0]
+            if isinstance(first, dict):
+                tuan = first.get("text") or first.get("name")
+            else:
+                tuan = str(first)
+        
+        # Parse nhân sự - "Người tạo" (Person field)
+        nhan_su = safe_extract_person_name(fields.get("Người tạo"))
+        
+        parsed.append({
+            "record_id": r.get("record_id"),
+            "thang": thang,
+            "tuan": tuan,
+            "thoi_gian_tuan": fields.get("Thời gian tuần"),
+            "nhan_su": nhan_su,
+            # Số liệu liên hệ - dùng "#" prefix theo screenshot
+            "da_deal": safe_number(fields.get("# Đã deal") or fields.get("Đã deal")),
+            "ty_le_deal": safe_number(fields.get("Tỷ lệ đã deal")),
+            "dang_trao_doi": safe_number(fields.get("# Đang trao đổi") or fields.get("Đang trao đổi")),
+            "ty_le_trao_doi": safe_number(fields.get("Tỷ lệ đang trao đổi")),
+            "tu_choi": safe_number(fields.get("# Từ chối") or fields.get("Từ chối")),
+            "ty_le_tu_choi": safe_number(fields.get("Tỷ lệ từ chối")),
+            "khong_phan_hoi_nhan": safe_number(fields.get("Không phản hồi khi nhắn") or fields.get("Không phản hồi khi n...")),
+            "khong_phan_hoi_dau": safe_number(fields.get("Không phản hồi từ đầu") or fields.get("Không phản hồi hồi t...")),
+            "tong_lien_he": safe_number(fields.get("Tổng liên hệ")),
+        })
+    
+    print(f"📞 CHENG Month distribution: {month_dist}")
+    print(f"📞 CHENG After filter: {len(parsed)} records")
+    
+    return parsed
+
+
+async def get_cheng_doanh_thu_records(month: int = None, week: int = None) -> List[Dict]:
+    """
+    Lấy records từ bảng CHENG - PR - Data doanh thu Koc (tuần)
+    Updated v5.7.0: Fixed field names based on actual screenshots
+    
+    Fields từ screenshot (Ảnh 4):
+    - Ngày báo cáo
+    - Tháng báo cáo (số: 09)
+    - Tuần báo cáo (Tuần 1)
+    - Thời gian tuần (1/9 - 7/9)
+    - Năm air (2024, 2025)
+    - Link video
+    - Ngày đăng
+    - ID kênh
+    - GMV
+    - Nhân sự book (Person field)
+    - Nhận xét nhân sự
+    """
+    records = await get_all_records(
+        CHENG_DOANH_THU_KOC_TABLE["app_token"],
+        CHENG_DOANH_THU_KOC_TABLE["table_id"]
+    )
+    
+    print(f"💰 CHENG Doanh thu: Total records = {len(records)}, filter month = {month}")
+    
+    # Debug field names
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"   🔍 CHENG Doanh thu field names: {list(first_fields.keys())}")
+    
+    parsed = []
+    month_dist = {}
+    
+    for r in records:
+        fields = r.get("fields", {})
+        
+        # Parse tháng
+        thang_raw = fields.get("Tháng báo cáo")
+        thang = None
+        try:
+            if isinstance(thang_raw, (int, float)):
+                thang = int(thang_raw)
+            elif isinstance(thang_raw, list) and len(thang_raw) > 0:
+                first = thang_raw[0]
+                if isinstance(first, dict):
+                    thang = int(first.get("text", 0))
+                else:
+                    thang = int(first)
+            elif isinstance(thang_raw, str):
+                match = re.search(r'\d+', thang_raw)
+                if match:
+                    thang = int(match.group())
+        except:
+            pass
+        
+        month_dist[thang] = month_dist.get(thang, 0) + 1
+        
+        if month and thang != month:
+            continue
+        
+        # Parse GMV
+        gmv = safe_number(fields.get("GMV"))
+        
+        # Parse nhân sự
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+        
+        parsed.append({
+            "record_id": r.get("record_id"),
+            "thang": thang,
+            "tuan": fields.get("Tuần báo cáo"),
+            "thoi_gian_tuan": fields.get("Thời gian tuần"),
+            "nam_air": fields.get("Năm air"),
+            "link_video": safe_extract_text(fields.get("Link video")),
+            "ngay_dang": fields.get("Ngày đăng"),
+            "id_kenh": fields.get("ID kênh"),
+            "gmv": gmv,
+            "nhan_su": nhan_su,
+            "nhan_xet": fields.get("Nhận xét nhân sự"),
+        })
+    
+    print(f"💰 CHENG Month distribution: {month_dist}")
+    print(f"💰 CHENG After filter: {len(parsed)} records")
+    
+    return parsed
+
+
+async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dict:
+    """
+    Tổng hợp báo cáo KOC cho CHENG
+    Updated v5.7.0: Improved logic với field names đúng
+    """
+    # Lấy dữ liệu từ các bảng Cheng
+    dashboard_records = await get_cheng_dashboard_records(month=month)
+    lien_he_records = await get_cheng_lien_he_records(month=month, week=week)
+    doanh_thu_records = await get_cheng_doanh_thu_records(month=month, week=week)
+    
+    # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
+    # Logic: Cộng tổng KPI và Air từ tất cả sản phẩm, CHỈ LẤY TUẦN 1
+    
+    kpi_by_nhan_su = {}
+    
+    # Debug tuần distribution
+    tuan_dist = {}
+    for r in dashboard_records:
+        tuan = r.get("tuan")
+        tuan_dist[tuan] = tuan_dist.get(tuan, 0) + 1
+    print(f"   📊 CHENG Tuần distribution: {tuan_dist}")
+    
+    for r in dashboard_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        
+        # CHỈ LẤY TUẦN 1 để tránh tính trùng
+        tuan = r.get("tuan")
+        is_tuan_1 = False
+        if tuan:
+            tuan_str = str(tuan).lower()
+            if "1" in tuan_str and ("tuần" in tuan_str or tuan_str.strip() == "1"):
+                is_tuan_1 = True
+        
+        if tuan and not is_tuan_1:
+            continue
+        
+        if nhan_su not in kpi_by_nhan_su:
+            kpi_by_nhan_su[nhan_su] = {
+                "kpi_so_luong": 0,
+                "kpi_ngan_sach": 0,
+                "so_luong_air": 0,
+                "ngan_sach_air": 0,
+                "pct_kpi_so_luong": 0,
+                "pct_kpi_ngan_sach": 0,
+            }
+        
+        # CỘNG TỔNG từ tất cả sản phẩm
+        kpi_sl = int(r.get("kpi_so_luong") or 0)
+        kpi_ns = int(r.get("kpi_ngan_sach") or 0)
+        sl_air = int(r.get("so_luong_tong_air") or r.get("so_luong_air") or 0)
+        ns_air = int(r.get("ngan_sach_tong_air") or r.get("ngan_sach_air") or 0)
+        
+        kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += kpi_sl
+        kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += kpi_ns
+        kpi_by_nhan_su[nhan_su]["so_luong_air"] += sl_air
+        kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += ns_air
+        
+        san_pham = r.get("san_pham") or "N/A"
+        print(f"   📌 CHENG {nhan_su} | {san_pham}: KPI={kpi_sl}, Air={sl_air}")
+    
+    # Tính % KPI
+    for nhan_su, data in kpi_by_nhan_su.items():
+        if data["kpi_so_luong"] > 0:
+            data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
+        if data["kpi_ngan_sach"] > 0:
+            data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
+        
+        print(f"   ✅ CHENG TỔNG {nhan_su}: {data['so_luong_air']}/{data['kpi_so_luong']} ({data['pct_kpi_so_luong']}%)")
+    
+    # === Tổng hợp liên hệ theo nhân sự ===
+    lien_he_by_nhan_su = {}
+    for r in lien_he_records:
+        nhan_su = r["nhan_su"]
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        
+        if nhan_su not in lien_he_by_nhan_su:
+            lien_he_by_nhan_su[nhan_su] = {
+                "tong_lien_he": 0,
+                "da_deal": 0,
+                "dang_trao_doi": 0,
+                "tu_choi": 0,
+            }
+        
+        lien_he_by_nhan_su[nhan_su]["tong_lien_he"] += int(r.get("tong_lien_he") or 0)
+        lien_he_by_nhan_su[nhan_su]["da_deal"] += int(r.get("da_deal") or 0)
+        lien_he_by_nhan_su[nhan_su]["dang_trao_doi"] += int(r.get("dang_trao_doi") or 0)
+        lien_he_by_nhan_su[nhan_su]["tu_choi"] += int(r.get("tu_choi") or 0)
+    
+    # Tính tỷ lệ
+    for ns, data in lien_he_by_nhan_su.items():
+        total = data["tong_lien_he"]
+        if total > 0:
+            data["ty_le_deal"] = round(data["da_deal"] / total * 100, 1)
+            data["ty_le_trao_doi"] = round(data["dang_trao_doi"] / total * 100, 1)
+            data["ty_le_tu_choi"] = round(data["tu_choi"] / total * 100, 1)
+        else:
+            data["ty_le_deal"] = 0
+            data["ty_le_trao_doi"] = 0
+            data["ty_le_tu_choi"] = 0
+    
+    # === Top KOC doanh số ===
+    koc_gmv = {}
+    for r in doanh_thu_records:
+        id_kenh = r.get("id_kenh")
+        if id_kenh:
+            if id_kenh not in koc_gmv:
+                koc_gmv[id_kenh] = 0
+            koc_gmv[id_kenh] += r.get("gmv") or 0
+    
+    # Sort by GMV
+    top_koc = sorted(koc_gmv.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    # === Tổng quan ===
+    total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
+    total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
+    total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
+    total_ngan_sach_air = sum(d["ngan_sach_air"] for d in kpi_by_nhan_su.values())
+    total_gmv = sum(koc_gmv.values())
+    
+    print(f"📊 CHENG TỔNG QUAN: {total_so_luong_air}/{total_kpi_so_luong} ({round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0}%)")
+    
+    return {
+        "brand": "CHENG",
+        "month": month,
+        "week": week,
+        "tong_quan": {
+            "kpi_so_luong": total_kpi_so_luong,
+            "so_luong_air": total_so_luong_air,
+            "pct_kpi_so_luong": round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0,
+            "kpi_ngan_sach": total_kpi_ngan_sach,
+            "ngan_sach_air": total_ngan_sach_air,
+            "pct_kpi_ngan_sach": round(total_ngan_sach_air / total_kpi_ngan_sach * 100, 1) if total_kpi_ngan_sach > 0 else 0,
+            "total_gmv": total_gmv,
+        },
+        "kpi_nhan_su": kpi_by_nhan_su,
+        "lien_he_nhan_su": lien_he_by_nhan_su,
+        "top_koc": top_koc,
+    }
+
+
+# ============ KALLE FUNCTIONS (Existing) ============
+
 async def get_booking_records(
     month: Optional[int] = None,
     week: Optional[int] = None,
     year: int = 2025
 ) -> List[Dict[str, Any]]:
-    """
-    Lấy records từ bảng Booking/KOC
-    
-    Args:
-        month: Tháng cần lọc (1-12)
-        week: Tuần cần lọc (1-4)
-        year: Năm
-    
-    Returns:
-        List các KOC records
-    """
-    # Lấy tất cả records (tăng max lên 2000 để đảm bảo lấy hết)
+    """Lấy records từ bảng Booking/KOC KALLE"""
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
@@ -317,16 +839,12 @@ async def get_booking_records(
     )
     
     def parse_lark_value(value):
-        """Parse giá trị từ Lark API, xử lý các format khác nhau"""
         if value is None:
             return None
-        
         if isinstance(value, str):
             return value
-        
         if isinstance(value, (int, float)):
             return value
-        
         if isinstance(value, list):
             if len(value) == 0:
                 return None
@@ -334,23 +852,18 @@ async def get_booking_records(
             if isinstance(first, dict):
                 return first.get("text") or first.get("value") or first.get("name")
             return first
-        
         if isinstance(value, dict):
             return value.get("text") or value.get("link") or value.get("value")
-        
         return str(value)
     
     def extract_month(value) -> Optional[int]:
-        """Extract tháng từ giá trị, trả về int 1-12"""
         if value is None:
             return None
-        
         if isinstance(value, (int, float)):
             month_val = int(value)
             if 1 <= month_val <= 12:
                 return month_val
             return None
-        
         if isinstance(value, str):
             match = re.search(r'(\d{1,2})', value)
             if match:
@@ -358,7 +871,6 @@ async def get_booking_records(
                 if 1 <= month_val <= 12:
                     return month_val
             return None
-        
         if isinstance(value, list):
             if len(value) == 0:
                 return None
@@ -382,13 +894,11 @@ async def get_booking_records(
                     if 1 <= month_val <= 12:
                         return month_val
             return None
-        
         if isinstance(value, dict):
             text_val = value.get("text") or value.get("value")
             if text_val:
                 return extract_month(text_val)
             return None
-        
         return None
     
     results = []
@@ -397,7 +907,6 @@ async def get_booking_records(
     
     print(f"📥 Fetched {total_records} total records from Lark Base")
     
-    # Count months distribution for debugging
     month_counts = {}
     for record in records:
         fields = record.get("fields", {})
@@ -424,26 +933,21 @@ async def get_booking_records(
             "ngay_gan_gio": parse_lark_value(fields.get("Ngày gắn giỏ")),
             "nhan_su_book": parse_lark_value(fields.get("Nhân sự book")),
             "san_pham": fields.get("Sản phẩm"),
-            # Tìm field phân loại sản phẩm - thử nhiều tên có thể
             "phan_loai_san_pham": find_phan_loai_field(fields),
             "status": parse_lark_value(fields.get("Status")),
             "luot_xem": parse_lark_value(fields.get("Lượt xem hiện tại")),
             "da_air": fields.get("Đã air"),
             "da_nhan": fields.get("Đã nhận"),
             "da_di_don": fields.get("Đã đi đơn"),
-            # Thêm chi phí
             "da_deal": parse_lark_value(fields.get("Đã deal")),
             "so_tien_tt": parse_lark_value(fields.get("Số tiền TT")),
         }
         
-        # Filter theo tháng nếu có
         if month is not None:
             koc_month = koc_data.get("thang_air")
-            
             if koc_month is None:
                 skipped_wrong_month += 1
                 continue
-            
             if koc_month != month:
                 skipped_wrong_month += 1
                 continue
@@ -454,6 +958,7 @@ async def get_booking_records(
     
     return results
 
+
 async def get_task_records(
     team: Optional[str] = None,
     vi_tri: Optional[str] = None,
@@ -461,19 +966,7 @@ async def get_task_records(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """
-    Lấy records từ bảng Task
-    
-    Args:
-        team: Tên team để filter (theo Người phụ trách)
-        vi_tri: Vị trí để filter (HR, Content Creator, Ecommerce...)
-        month: Tháng để filter (1-12) - dựa trên field "Tháng"
-        start_date: Ngày bắt đầu (YYYY-MM-DD)
-        end_date: Ngày kết thúc (YYYY-MM-DD)
-    
-    Returns:
-        List các task records
-    """
+    """Lấy records từ bảng Task"""
     records = await get_all_records(
         app_token=TASK_BASE["app_token"],
         table_id=TASK_BASE["table_id"],
@@ -481,7 +974,6 @@ async def get_task_records(
     )
     
     def parse_person_field(value):
-        """Parse field người phụ trách"""
         if value is None:
             return None
         if isinstance(value, list) and len(value) > 0:
@@ -493,20 +985,16 @@ async def get_task_records(
         return str(value) if value else None
     
     def extract_task_month(value) -> Optional[int]:
-        """Extract tháng từ field Tháng của Task"""
         if value is None:
             return None
-        
         if isinstance(value, (int, float)):
             m = int(value)
             return m if 1 <= m <= 12 else None
-        
         if isinstance(value, str):
             match = re.search(r'(\d{1,2})', value)
             if match:
                 m = int(match.group(1))
                 return m if 1 <= m <= 12 else None
-        
         if isinstance(value, list) and len(value) > 0:
             first = value[0]
             if isinstance(first, dict):
@@ -516,14 +1004,12 @@ async def get_task_records(
                     if match:
                         m = int(match.group(1))
                         return m if 1 <= m <= 12 else None
-        
         return None
     
     results = []
     for record in records:
         fields = record.get("fields", {})
         
-        # Parse deadline
         deadline_raw = fields.get("Deadline")
         deadline_ts = None
         deadline_str = None
@@ -537,7 +1023,6 @@ async def get_task_records(
             except:
                 pass
         
-        # Extract tháng từ field "Tháng"
         task_month = extract_task_month(fields.get("Tháng"))
         
         task_data = {
@@ -555,16 +1040,14 @@ async def get_task_records(
             "duyet": fields.get("Duyệt"),
             "overdue": fields.get("Overdue"),
             "ghi_chu": extract_field_value(fields, "Ghi chú"),
-            "thang": task_month,  # Đã parse thành int
+            "thang": task_month,
             "nam": extract_field_value(fields, "Năm"),
         }
         
-        # Filter theo tháng (field "Tháng")
         if month is not None:
             if task_data.get("thang") != month:
                 continue
         
-        # Filter theo vị trí
         if vi_tri:
             task_vi_tri = task_data.get("vi_tri")
             if task_vi_tri:
@@ -573,7 +1056,6 @@ async def get_task_records(
             else:
                 continue
         
-        # Filter theo team (người phụ trách)
         if team:
             phu_trach = task_data.get("nguoi_phu_trach")
             if phu_trach:
@@ -582,7 +1064,6 @@ async def get_task_records(
             else:
                 continue
         
-        # Filter theo ngày deadline
         if start_date or end_date:
             if deadline_ts:
                 try:
@@ -604,9 +1085,9 @@ async def get_task_records(
     
     return results
 
-# ============ REPORT GENERATORS ============
 
-# Product filter patterns
+# ============ REPORT GENERATORS (KALLE) ============
+
 PRODUCT_FILTER_PATTERNS = {
     "box_qua": ["box quà", "box qua", "set quà", "set qua"],
     "nuoc_hoa": ["nước hoa", "nuoc hoa"],
@@ -619,22 +1100,9 @@ async def generate_koc_summary(
     group_by: str = "product",
     product_filter: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Tạo báo cáo tổng hợp KOC theo tháng/tuần
-    Bao gồm: chi phí deal, số lượng theo sản phẩm hoặc phân loại
-    
-    Args:
-        month: Tháng cần lấy
-        week: Tuần cần lấy (optional)
-        group_by: "product" (Nước hoa, Box quà) hoặc "brand" (Dark Beauty, Lady Killer)
-        product_filter: Filter theo loại sản phẩm ("box_qua", "nuoc_hoa", etc.)
-    
-    Returns:
-        Dict chứa summary và danh sách chi tiết
-    """
+    """Tạo báo cáo tổng hợp KOC KALLE theo tháng/tuần"""
     records = await get_booking_records(month=month, week=week)
     
-    # Filter by product if specified
     if product_filter and product_filter in PRODUCT_FILTER_PATTERNS:
         patterns = PRODUCT_FILTER_PATTERNS[product_filter]
         filtered_records = []
@@ -651,20 +1119,16 @@ async def generate_koc_summary(
     da_air_chua_link = 0
     da_air_chua_gan_gio = 0
     
-    # Chi phí
     tong_chi_phi_deal = 0
     tong_chi_phi_thanh_toan = 0
     
-    # Theo sản phẩm (Nước hoa, Box quà) - mặc định
     by_product = {}
-    # Theo phân loại/brand (Dark Beauty, Lady Killer)
     by_brand = {}
     
     missing_link_kocs = []
     missing_gio_kocs = []
     
     def safe_string(value):
-        """Convert value to string safely"""
         if value is None:
             return "Không xác định"
         if isinstance(value, str):
@@ -681,7 +1145,6 @@ async def generate_koc_summary(
         return str(value) if value else "Không xác định"
     
     for koc in records:
-        # === Chi phí ===
         da_deal = koc.get("da_deal")
         if da_deal:
             try:
@@ -698,20 +1161,16 @@ async def generate_koc_summary(
             except:
                 pass
         
-        # === Lấy sản phẩm và phân loại ===
-        san_pham = safe_string(koc.get("san_pham"))  # Nước hoa, Box quà 30ml
-        phan_loai = safe_string(koc.get("phan_loai_san_pham"))  # Dark Beauty, Lady Killer
+        san_pham = safe_string(koc.get("san_pham"))
+        phan_loai = safe_string(koc.get("phan_loai_san_pham"))
         
-        # Nếu không có phân loại, fallback về sản phẩm
         if phan_loai == "Không xác định" and san_pham != "Không xác định":
             phan_loai = san_pham
         
-        # === Group theo sản phẩm ===
         if san_pham not in by_product:
             by_product[san_pham] = {"count": 0, "chi_phi": 0, "da_air": 0, "chua_air": 0, "kocs": []}
         by_product[san_pham]["count"] += 1
         
-        # === Group theo phân loại/brand ===
         if phan_loai not in by_brand:
             by_brand[phan_loai] = {"count": 0, "chi_phi": 0, "da_air": 0, "chua_air": 0, "kocs": []}
         by_brand[phan_loai]["count"] += 1
@@ -724,14 +1183,12 @@ async def generate_koc_summary(
             except:
                 pass
         
-        # === Kiểm tra đã air ===
         link_air = koc.get("link_air_bai")
         thoi_gian_air = koc.get("thoi_gian_air_video")
         da_air_field = koc.get("da_air")
         
         has_aired = bool(link_air or thoi_gian_air or da_air_field)
         
-        # Lưu thông tin KOC để đề xuất cụ thể
         koc_info = {
             "id_koc": koc.get("id_koc"),
             "id_kenh": koc.get("id_kenh"),
@@ -766,7 +1223,6 @@ async def generate_koc_summary(
             by_product[san_pham]["chua_air"] += 1
             by_brand[phan_loai]["chua_air"] += 1
     
-    # Chọn data theo group_by
     by_group = by_brand if group_by == "brand" else by_product
     group_label = "phân loại sản phẩm" if group_by == "brand" else "sản phẩm"
     
@@ -784,13 +1240,14 @@ async def generate_koc_summary(
             "tong_chi_phi_deal": tong_chi_phi_deal,
             "tong_chi_phi_thanh_toan": tong_chi_phi_thanh_toan
         },
-        "by_group": by_group,  # Data theo group_by
-        "by_product": by_product,  # Luôn có để backup
-        "by_brand": by_brand,  # Luôn có để backup
+        "by_group": by_group,
+        "by_product": by_product,
+        "by_brand": by_brand,
         "missing_link_kocs": missing_link_kocs[:10],
         "missing_gio_kocs": missing_gio_kocs[:10],
         "all_records": records
     }
+
 
 async def generate_content_calendar(
     start_date: Optional[str] = None,
@@ -799,37 +1256,14 @@ async def generate_content_calendar(
     team: Optional[str] = None,
     vi_tri: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Tạo báo cáo lịch content theo tuần hoặc tháng
-    
-    Args:
-        start_date: Ngày bắt đầu (YYYY-MM-DD) - optional
-        end_date: Ngày kết thúc (YYYY-MM-DD) - optional
-        month: Tháng cần filter (1-12) - ưu tiên hơn start_date/end_date
-        team: Filter theo team (optional)
-        vi_tri: Filter theo vị trí (optional)
-    
-    Returns:
-        Dict chứa calendar summary
-    """
-    # Nếu có month, ưu tiên filter theo month
+    """Tạo báo cáo lịch content theo tuần hoặc tháng"""
     if month:
-        records = await get_task_records(
-            team=team,
-            vi_tri=vi_tri,
-            month=month
-        )
+        records = await get_task_records(team=team, vi_tri=vi_tri, month=month)
         date_range = f"Tháng {month}"
     else:
-        records = await get_task_records(
-            team=team,
-            vi_tri=vi_tri,
-            start_date=start_date,
-            end_date=end_date
-        )
+        records = await get_task_records(team=team, vi_tri=vi_tri, start_date=start_date, end_date=end_date)
         date_range = f"{start_date} → {end_date}" if start_date and end_date else "tuần này"
     
-    # Group theo ngày
     by_date = {}
     by_vi_tri = {}
     overdue = []
@@ -839,19 +1273,16 @@ async def generate_content_calendar(
         vi_tri_task = task.get("vi_tri") or "Không xác định"
         overdue_field = task.get("overdue")
         
-        # Group by date
         if deadline:
             date_key = str(deadline)[:10]
             if date_key not in by_date:
                 by_date[date_key] = []
             by_date[date_key].append(task)
         
-        # Group by vị trí
         if vi_tri_task not in by_vi_tri:
             by_vi_tri[vi_tri_task] = []
         by_vi_tri[vi_tri_task].append(task)
         
-        # Check overdue (field Overdue có giá trị = đã quá hạn)
         if overdue_field:
             overdue.append(task)
     
@@ -877,27 +1308,15 @@ async def generate_task_summary(
     month: Optional[int] = None,
     vi_tri: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Tạo báo cáo phân tích task theo vị trí
-    Bao gồm: task quá hạn, sắp đến deadline theo từng vị trí
-    
-    Args:
-        month: Tháng cần phân tích (1-12)
-        vi_tri: Vị trí cụ thể để filter (optional)
-    
-    Returns:
-        Dict chứa task summary theo vị trí
-    """
-    # Lấy tasks với filter
+    """Tạo báo cáo phân tích task theo vị trí"""
     tasks = await get_task_records(vi_tri=vi_tri, month=month)
     
     now = datetime.now()
     today = now.date()
     
-    # Phân tích theo vị trí
     by_vi_tri = {}
     total_overdue = 0
-    total_sap_deadline = 0  # Trong 3 ngày tới
+    total_sap_deadline = 0
     total_chua_duyet = 0
     
     overdue_tasks = []
@@ -909,7 +1328,6 @@ async def generate_task_summary(
         deadline_ts = task.get("deadline_ts")
         duyet = task.get("duyet")
         
-        # Khởi tạo vị trí nếu chưa có
         if vi_tri_task not in by_vi_tri:
             by_vi_tri[vi_tri_task] = {
                 "total": 0,
@@ -923,14 +1341,12 @@ async def generate_task_summary(
         
         by_vi_tri[vi_tri_task]["total"] += 1
         
-        # Kiểm tra overdue
         if overdue_field:
             by_vi_tri[vi_tri_task]["overdue"] += 1
             by_vi_tri[vi_tri_task]["tasks_overdue"].append(task)
             overdue_tasks.append(task)
             total_overdue += 1
         
-        # Kiểm tra sắp đến deadline (trong 3 ngày tới)
         if deadline_ts and not overdue_field:
             try:
                 deadline_dt = datetime.fromtimestamp(deadline_ts / 1000).date()
@@ -944,14 +1360,12 @@ async def generate_task_summary(
             except:
                 pass
         
-        # Kiểm tra duyệt
         if duyet:
             by_vi_tri[vi_tri_task]["da_duyet"] += 1
         else:
             by_vi_tri[vi_tri_task]["chua_duyet"] += 1
             total_chua_duyet += 1
     
-    # Giới hạn số task trả về
     for vi_tri_key in by_vi_tri:
         by_vi_tri[vi_tri_key]["tasks_overdue"] = by_vi_tri[vi_tri_key]["tasks_overdue"][:5]
         by_vi_tri[vi_tri_key]["tasks_sap_deadline"] = by_vi_tri[vi_tri_key]["tasks_sap_deadline"][:5]
@@ -971,143 +1385,11 @@ async def generate_task_summary(
         "sap_deadline_tasks": sap_deadline_tasks[:20]
     }
 
-# ============ TEST ============
-async def get_field_names(app_token: str, table_id: str) -> list:
-    """Lấy danh sách tất cả field names từ một bảng"""
-    records = await get_all_records(app_token, table_id, max_records=1)
-    if records:
-        return list(records[0].get("fields", {}).keys())
-    return []
 
-async def test_connection():
-    """Test kết nối với Lark Base"""
-    try:
-        print("🔄 Testing Lark Base connection...")
-        
-        # Test Booking base
-        booking_records = await get_all_records(
-            app_token=BOOKING_BASE["app_token"],
-            table_id=BOOKING_BASE["table_id"],
-            max_records=5
-        )
-        print(f"✅ Booking Base: {len(booking_records)} records found")
-        
-        if booking_records:
-            all_fields = list(booking_records[0].get('fields', {}).keys())
-            print(f"   All fields ({len(all_fields)}): {all_fields}")
-        
-        # Test Task base
-        task_records = await get_all_records(
-            app_token=TASK_BASE["app_token"],
-            table_id=TASK_BASE["table_id"],
-            max_records=5
-        )
-        print(f"✅ Task Base: {len(task_records)} records found")
-        
-        if task_records:
-            all_fields = list(task_records[0].get('fields', {}).keys())
-            print(f"   All fields ({len(all_fields)}): {all_fields}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Connection test failed: {e}")
-        return False
-
-async def debug_booking_fields():
-    """Debug: Xem tất cả fields và sample values từ Booking table"""
-    records = await get_all_records(
-        app_token=BOOKING_BASE["app_token"],
-        table_id=BOOKING_BASE["table_id"],
-        max_records=3
-    )
-    
-    result = {
-        "total_sample": len(records),
-        "fields": {},
-        "sample_records": []
-    }
-    
-    if records:
-        # Lấy tất cả field names
-        all_fields = list(records[0].get("fields", {}).keys())
-        result["all_field_names"] = all_fields
-        
-        # Lấy sample values cho mỗi field
-        for record in records:
-            fields = record.get("fields", {})
-            sample = {}
-            for key, value in fields.items():
-                sample[key] = str(value)[:100] if value else None
-            result["sample_records"].append(sample)
-    
-    return result
-
-async def debug_task_fields():
-    """Debug: Xem tất cả fields và sample values từ Task table"""
-    records = await get_all_records(
-        app_token=TASK_BASE["app_token"],
-        table_id=TASK_BASE["table_id"],
-        max_records=3
-    )
-    
-    result = {
-        "total_sample": len(records),
-        "fields": {},
-        "sample_records": []
-    }
-    
-    if records:
-        # Lấy tất cả field names
-        all_fields = list(records[0].get("fields", {}).keys())
-        result["all_field_names"] = all_fields
-        
-        # Lấy sample values cho mỗi field
-        for record in records:
-            fields = record.get("fields", {})
-            sample = {}
-            for key, value in fields.items():
-                sample[key] = str(value)[:100] if value else None
-            result["sample_records"].append(sample)
-    
-    return result
-
-
-# ============ DASHBOARD FUNCTIONS ============
-
-def safe_extract_text(value):
-    """Extract text value from Lark field (handles list, dict, string)"""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (int, float)):
-        return value
-    if isinstance(value, list) and len(value) > 0:
-        first = value[0]
-        if isinstance(first, dict):
-            return first.get("text") or first.get("name") or first.get("value")
-        return str(first)
-    if isinstance(value, dict):
-        return value.get("text") or value.get("name") or value.get("value")
-    return str(value)
-
-
-def safe_extract_person_name(value):
-    """Extract person name from Lark person field"""
-    if value is None:
-        return "Không xác định"
-    if isinstance(value, list) and len(value) > 0:
-        first = value[0]
-        if isinstance(first, dict):
-            return first.get("name") or first.get("en_name") or "Không xác định"
-    if isinstance(value, dict):
-        return value.get("name") or value.get("en_name") or "Không xác định"
-    return str(value)
-
+# ============ KALLE DASHBOARD FUNCTIONS ============
 
 async def get_dashboard_thang_records(month: Optional[int] = None, week: Optional[str] = None) -> List[Dict]:
-    """Lấy records từ bảng Dashboard Tháng"""
+    """Lấy records từ bảng Dashboard Tháng KALLE"""
     records = await get_all_records(
         app_token=DASHBOARD_THANG_TABLE["app_token"],
         table_id=DASHBOARD_THANG_TABLE["table_id"],
@@ -1117,25 +1399,22 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
     print(f"📊 Dashboard Tháng: Total records = {len(records)}, filter month = {month}")
     
     result = []
-    month_distribution = {}  # Debug: đếm số record theo tháng
+    month_distribution = {}
     
     for record in records:
         fields = record.get("fields", {})
         
-        # Filter by month if specified
         thang_raw = safe_extract_text(fields.get("Tháng báo cáo"))
         try:
             thang = int(thang_raw) if thang_raw else None
         except:
             thang = None
         
-        # Debug: đếm distribution
         month_distribution[thang] = month_distribution.get(thang, 0) + 1
         
         if month and thang != month:
             continue
         
-        # Filter by week if specified
         tuan = fields.get("Tuần báo cáo")
         if week and tuan != week:
             continue
@@ -1164,7 +1443,7 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
 
 
 async def get_doanh_thu_koc_records(month: Optional[int] = None, week: Optional[str] = None) -> List[Dict]:
-    """Lấy records từ bảng Doanh thu KOC (tuần)"""
+    """Lấy records từ bảng Doanh thu KOC KALLE (tuần)"""
     records = await get_all_records(
         app_token=DOANH_THU_KOC_TABLE["app_token"],
         table_id=DOANH_THU_KOC_TABLE["table_id"],
@@ -1175,7 +1454,6 @@ async def get_doanh_thu_koc_records(month: Optional[int] = None, week: Optional[
     for record in records:
         fields = record.get("fields", {})
         
-        # Filter by month
         thang_raw = safe_extract_text(fields.get("Tháng báo cáo"))
         try:
             thang = int(thang_raw) if thang_raw else None
@@ -1185,12 +1463,10 @@ async def get_doanh_thu_koc_records(month: Optional[int] = None, week: Optional[
         if month and thang != month:
             continue
         
-        # Filter by week
         tuan = fields.get("Tuần báo cáo")
         if week and tuan != week:
             continue
         
-        # Parse GMV
         gmv_raw = fields.get("GMV", "0")
         try:
             gmv = float(str(gmv_raw).replace(",", ""))
@@ -1210,7 +1486,7 @@ async def get_doanh_thu_koc_records(month: Optional[int] = None, week: Optional[
 
 
 async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] = None) -> List[Dict]:
-    """Lấy records từ bảng Data liên hệ (tuần)"""
+    """Lấy records từ bảng Data liên hệ KALLE (tuần)"""
     records = await get_all_records(
         app_token=LIEN_HE_TUAN_TABLE["app_token"],
         table_id=LIEN_HE_TUAN_TABLE["table_id"],
@@ -1225,20 +1501,17 @@ async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] =
     for record in records:
         fields = record.get("fields", {})
         
-        # Filter by month
         thang_raw = safe_extract_text(fields.get("Tháng báo cáo"))
         try:
             thang = int(thang_raw) if thang_raw else None
         except:
             thang = None
         
-        # Debug
         month_distribution[thang] = month_distribution.get(thang, 0) + 1
         
         if month and thang != month:
             continue
         
-        # Filter by week
         tuan = fields.get("Tuần báo cáo")
         if week and tuan != week:
             continue
@@ -1265,53 +1538,36 @@ async def get_lien_he_records(month: Optional[int] = None, week: Optional[str] =
 
 
 async def generate_dashboard_summary(month: Optional[int] = None, week: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Tạo báo cáo Dashboard tổng hợp
-    Bao gồm: KPI nhân sự, Top KOC, Tỷ lệ liên hệ
-    
-    Logic mới:
-    - Số video đã air = Đếm từ bảng Booking (có Link air bài)
-    - KPI = Lấy từ Dashboard Tháng nhưng CHỈ 1 LẦN (không cộng tổng các tuần)
-    """
-    # 1. Lấy data Dashboard Tháng (KPI) - CHỈ ĐỂ LẤY KPI TARGET
+    """Tạo báo cáo Dashboard tổng hợp KALLE"""
     dashboard_records = await get_dashboard_thang_records(month=month, week=week)
     
-    # 2. Lấy data từ Booking để đếm số video đã air
     booking_records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
         max_records=2000
     )
     
-    # 3. Lấy data Doanh thu KOC
     doanh_thu_records = await get_doanh_thu_koc_records(month=month, week=week)
-    
-    # 4. Lấy data Liên hệ
     lien_he_records = await get_lien_he_records(month=month, week=week)
     
-    # === Đếm số video đã air từ Booking (theo nhân sự và THÁNG AIR THỰC TẾ) ===
+    # Đếm video đã air theo nhân sự
     video_air_by_nhan_su = {}
     for record in booking_records:
         fields = record.get("fields", {})
         
-        # Kiểm tra có link air không
         link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
         if not link_air:
             continue
         
-        # Lấy thời gian air thực tế (ưu tiên) hoặc tháng dự kiến (fallback)
         thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
         thang_air = None
         
-        # Parse thời gian air để lấy tháng
         if thoi_gian_air:
             try:
                 if isinstance(thoi_gian_air, (int, float)):
-                    # Unix timestamp (ms)
                     dt = datetime.fromtimestamp(thoi_gian_air / 1000)
                     thang_air = dt.month
                 elif isinstance(thoi_gian_air, str):
-                    # Try parse string date
                     for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
                         try:
                             dt = datetime.strptime(thoi_gian_air[:10], fmt)
@@ -1322,7 +1578,6 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             except:
                 pass
         
-        # Fallback: dùng tháng dự kiến nếu không có thời gian air
         if thang_air is None:
             thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
             try:
@@ -1336,11 +1591,9 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             except:
                 pass
         
-        # Filter theo tháng
         if month and thang_air != month:
             continue
         
-        # Lấy tên nhân sự (strip để bỏ khoảng trắng thừa)
         nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
         if nhan_su:
             nhan_su = nhan_su.strip()
@@ -1351,12 +1604,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     
     print(f"📹 Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
     
-    # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
-    # LOGIC ĐÚNG:
-    # - "KPI Số lượng" = KPI của từng sản phẩm → CỘNG TỔNG tất cả sản phẩm
-    # - "Số lượng tổng - Air" = Air của từng sản phẩm → CỘNG TỔNG tất cả sản phẩm
-    # Chỉ lấy Tuần 1 để tránh nhân đôi
-    
+    # Tổng hợp KPI theo nhân sự
     kpi_by_nhan_su = {}
     
     for r in dashboard_records:
@@ -1364,7 +1612,6 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         if nhan_su:
             nhan_su = nhan_su.strip()
         
-        # CHỈ LẤY TUẦN 1
         tuan = r.get("tuan")
         if tuan and tuan != "Tuần 1":
             continue
@@ -1379,7 +1626,6 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
                 "pct_kpi_ngan_sach": 0,
             }
         
-        # CỘNG TỔNG KPI và Air từ tất cả sản phẩm
         try:
             kpi_sl = int(r.get("kpi_so_luong") or 0)
             kpi_ns = int(r.get("kpi_ngan_sach") or 0)
@@ -1396,7 +1642,6 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         except Exception as e:
             print(f"   ❌ Error: {e}")
     
-    # Tính % KPI
     for nhan_su, data in kpi_by_nhan_su.items():
         if data["kpi_so_luong"] > 0:
             data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
@@ -1407,7 +1652,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     
     print(f"📊 KPI by nhân sự (từ Dashboard): {kpi_by_nhan_su}")
     
-    # === Top KOC doanh số ===
+    # Top KOC doanh số
     koc_gmv = {}
     for r in doanh_thu_records:
         id_kenh = r["id_kenh"]
@@ -1416,10 +1661,9 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
                 koc_gmv[id_kenh] = 0
             koc_gmv[id_kenh] += r["gmv"]
     
-    # Sort by GMV
     top_koc = sorted(koc_gmv.items(), key=lambda x: x[1], reverse=True)[:10]
     
-    # === Tổng hợp liên hệ theo nhân sự ===
+    # Tổng hợp liên hệ theo nhân sự
     lien_he_by_nhan_su = {}
     for r in lien_he_records:
         nhan_su = r["nhan_su"]
@@ -1439,7 +1683,6 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         except:
             pass
     
-    # Tính tỷ lệ
     for ns, data in lien_he_by_nhan_su.items():
         total = data["tong_lien_he"]
         if total > 0:
@@ -1451,7 +1694,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === Tổng quan ===
+    # Tổng quan
     total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
     total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
     total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
@@ -1478,381 +1721,228 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     }
 
 
-# ============ CHENG FUNCTIONS ============
-
-async def get_cheng_booking_records(month: int = None, week: int = None) -> List[Dict]:
-    """Lấy danh sách booking từ bảng CHENG"""
-    records = await get_all_records(
-        CHENG_BOOKING_TABLE["app_token"],
-        CHENG_BOOKING_TABLE["table_id"]
-    )
-    
-    print(f"📋 CHENG Booking: Total records = {len(records)}, filter month = {month}, week = {week}")
-    
-    if not month and not week:
-        return records
-    
-    filtered = []
-    month_dist = {}
-    
-    for record in records:
-        fields = record.get("fields", {})
-        
-        # Lấy tháng dự kiến
-        thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
-        thang_du_kien = None
-        
-        try:
-            if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
-                first = thang_du_kien_raw[0]
-                thang_du_kien = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
-            elif isinstance(thang_du_kien_raw, (int, float)):
-                thang_du_kien = int(thang_du_kien_raw)
-            elif isinstance(thang_du_kien_raw, str):
-                thang_du_kien = int(thang_du_kien_raw)
-        except:
-            pass
-        
-        if thang_du_kien:
-            month_dist[thang_du_kien] = month_dist.get(thang_du_kien, 0) + 1
-        
-        # Filter by month
-        if month and thang_du_kien != month:
-            continue
-        
-        filtered.append(record)
-    
-    print(f"📋 CHENG Month distribution: {month_dist}")
-    print(f"📋 CHENG After filter: {len(filtered)} records")
-    
-    return filtered
-
-
-async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
-    """Lấy records từ bảng CHENG - DASHBOARD THÁNG"""
-    records = await get_all_records(
-        CHENG_DASHBOARD_THANG_TABLE["app_token"],
-        CHENG_DASHBOARD_THANG_TABLE["table_id"]
-    )
-    
-    print(f"📊 CHENG Dashboard: Total records = {len(records)}, filter month = {month}")
-    
-    # Debug: in ra các field names của record đầu tiên
+# ============ TEST ============
+async def get_field_names(app_token: str, table_id: str) -> list:
+    """Lấy danh sách tất cả field names từ một bảng"""
+    records = await get_all_records(app_token, table_id, max_records=1)
     if records:
-        first_fields = records[0].get("fields", {})
-        print(f"   🔍 CHENG Dashboard field names: {list(first_fields.keys())[:15]}")
-    
-    parsed = []
-    month_dist = {}
-    
-    for r in records:
-        fields = r.get("fields", {})
+        return list(records[0].get("fields", {}).keys())
+    return []
+
+async def test_connection():
+    """Test kết nối với Lark Base"""
+    try:
+        print("🔄 Testing Lark Base connection...")
         
-        # Parse tháng - CHENG dùng "Tháng báo cáo"
-        thang_raw = fields.get("Tháng báo cáo") or fields.get("Tháng") or fields.get("thang")
-        thang = None
-        try:
-            if isinstance(thang_raw, list) and len(thang_raw) > 0:
-                first = thang_raw[0]
-                thang = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
-            elif isinstance(thang_raw, (int, float)):
-                thang = int(thang_raw)
-            elif isinstance(thang_raw, str):
-                import re
-                match = re.search(r'\d+', thang_raw)
-                if match:
-                    thang = int(match.group())
-        except:
-            pass
-        
-        month_dist[thang] = month_dist.get(thang, 0) + 1
-        
-        if month and thang != month:
-            continue
-        
-        # Parse tuần - CHENG dùng "Tuần báo cáo"
-        tuan = fields.get("Tuần báo cáo") or fields.get("Tuần") or fields.get("tuan")
-        
-        # Parse nhân sự - CHENG có thể dùng "Người tạo" hoặc "Nhân sự book"
-        nhan_su = safe_extract_person_name(
-            fields.get("Nhân sự book") or 
-            fields.get("Nhân sự") or 
-            fields.get("Người tạo")
+        booking_records = await get_all_records(
+            app_token=BOOKING_BASE["app_token"],
+            table_id=BOOKING_BASE["table_id"],
+            max_records=5
         )
+        print(f"✅ Booking Base: {len(booking_records)} records found")
         
-        parsed.append({
-            "record_id": r.get("record_id"),
-            "thang": thang,
-            "tuan": tuan,
-            "san_pham": fields.get("Sản phẩm") or fields.get("san_pham"),
-            "nhan_su": nhan_su,
-            "kpi_so_luong": fields.get("KPI - Số lượng") or fields.get("KPI Số lượng") or fields.get("kpi_so_luong") or 0,
-            "kpi_ngan_sach": fields.get("KPI - Ngân sách") or fields.get("KPI ngân sách") or fields.get("kpi_ngan_sach") or 0,
-            "so_luong_deal": fields.get("Số lượng - Deal") or fields.get("so_luong_deal") or 0,
-            "so_luong_air": fields.get("Số lượng - Air") or fields.get("so_luong_air") or 0,
-            "so_luong_tong_air": fields.get("Số lượng tổng - Air") or fields.get("so_luong_tong_air") or 0,
-            "ngan_sach_air": fields.get("Ngân sách - Air") or fields.get("ngan_sach_air") or 0,
-            "ngan_sach_tong_air": fields.get("Ngân sách tổng - Air") or fields.get("ngan_sach_tong_air") or 0,
-        })
-    
-    print(f"   📊 CHENG Month distribution: {month_dist}")
-    print(f"📊 CHENG Dashboard after filter: {len(parsed)} records")
-    return parsed
+        if booking_records:
+            all_fields = list(booking_records[0].get('fields', {}).keys())
+            print(f"   All fields ({len(all_fields)}): {all_fields}")
+        
+        task_records = await get_all_records(
+            app_token=TASK_BASE["app_token"],
+            table_id=TASK_BASE["table_id"],
+            max_records=5
+        )
+        print(f"✅ Task Base: {len(task_records)} records found")
+        
+        if task_records:
+            all_fields = list(task_records[0].get('fields', {}).keys())
+            print(f"   All fields ({len(all_fields)}): {all_fields}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Connection test failed: {e}")
+        return False
 
-
-async def get_cheng_lien_he_records(month: int = None, week: int = None) -> List[Dict]:
-    """Lấy records từ bảng CHENG - PR - Data liên hệ (tuần)"""
+async def debug_booking_fields():
+    """Debug: Xem tất cả fields từ Booking table"""
     records = await get_all_records(
-        CHENG_LIEN_HE_TABLE["app_token"],
-        CHENG_LIEN_HE_TABLE["table_id"]
+        app_token=BOOKING_BASE["app_token"],
+        table_id=BOOKING_BASE["table_id"],
+        max_records=3
     )
     
-    print(f"📞 CHENG Liên hệ: Total records = {len(records)}, filter month = {month}")
-    
-    # Debug: in ra các field names của record đầu tiên
-    if records:
-        first_fields = records[0].get("fields", {})
-        print(f"   🔍 CHENG Liên hệ field names: {list(first_fields.keys())[:15]}")
-    
-    parsed = []
-    month_dist = {}
-    
-    for r in records:
-        fields = r.get("fields", {})
-        
-        # Parse tháng - CHENG dùng "Tháng báo cáo"
-        thang_raw = fields.get("Tháng báo cáo") or fields.get("Tháng") or fields.get("thang")
-        thang = None
-        try:
-            if isinstance(thang_raw, list) and len(thang_raw) > 0:
-                first = thang_raw[0]
-                thang = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
-            elif isinstance(thang_raw, (int, float)):
-                thang = int(thang_raw)
-            elif isinstance(thang_raw, str):
-                import re
-                match = re.search(r'\d+', thang_raw)
-                if match:
-                    thang = int(match.group())
-        except:
-            pass
-        
-        month_dist[thang] = month_dist.get(thang, 0) + 1
-        
-        if month and thang != month:
-            continue
-        
-        # Parse nhân sự - CHENG dùng "Người tạo"
-        nhan_su = safe_extract_person_name(
-            fields.get("Nhân sự") or 
-            fields.get("Người tạo") or
-            fields.get("Nhân sự book")
-        )
-        
-        parsed.append({
-            "record_id": r.get("record_id"),
-            "thang": thang,
-            "tuan": fields.get("Tuần báo cáo") or fields.get("Tuần") or fields.get("tuan"),
-            "nhan_su": nhan_su,
-            "tong_lien_he": fields.get("Tổng liên hệ") or fields.get("tong_lien_he") or 0,
-            "da_deal": fields.get("Đã deal") or fields.get("da_deal") or 0,
-            "dang_trao_doi": fields.get("Đang trao đổi") or fields.get("dang_trao_doi") or 0,
-            "tu_choi": fields.get("Từ chối") or fields.get("tu_choi") or 0,
-        })
-    
-    print(f"📞 CHENG Month distribution: {month_dist}")
-    print(f"📞 CHENG After filter: {len(parsed)} records")
-    
-    return parsed
-
-
-async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dict:
-    """
-    Tổng hợp báo cáo KOC cho CHENG
-    Tương tự generate_koc_summary nhưng cho bảng Cheng
-    """
-    # Lấy dữ liệu từ các bảng Cheng
-    booking_records = await get_cheng_booking_records(month=month, week=week)
-    dashboard_records = await get_cheng_dashboard_records(month=month)
-    lien_he_records = await get_cheng_lien_he_records(month=month, week=week)
-    
-    # === Đếm số video đã air từ Booking (theo nhân sự và THÁNG AIR THỰC TẾ) ===
-    video_air_by_nhan_su = {}
-    for record in booking_records:
-        fields = record.get("fields", {})
-        
-        # Kiểm tra có link air không
-        link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
-        if not link_air:
-            continue
-        
-        # Lấy thời gian air thực tế
-        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
-        thang_air = None
-        
-        if thoi_gian_air:
-            try:
-                if isinstance(thoi_gian_air, (int, float)):
-                    dt = datetime.fromtimestamp(thoi_gian_air / 1000)
-                    thang_air = dt.month
-                elif isinstance(thoi_gian_air, str):
-                    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
-                        try:
-                            dt = datetime.strptime(thoi_gian_air[:10], fmt)
-                            thang_air = dt.month
-                            break
-                        except:
-                            continue
-            except:
-                pass
-        
-        # Fallback: dùng tháng dự kiến
-        if thang_air is None:
-            thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air")
-            try:
-                if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
-                    first = thang_du_kien_raw[0]
-                    thang_air = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
-                elif isinstance(thang_du_kien_raw, (int, float)):
-                    thang_air = int(thang_du_kien_raw)
-                elif isinstance(thang_du_kien_raw, str):
-                    thang_air = int(thang_du_kien_raw)
-            except:
-                pass
-        
-        if month and thang_air != month:
-            continue
-        
-        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
-        if nhan_su:
-            nhan_su = nhan_su.strip()
-        
-        if nhan_su not in video_air_by_nhan_su:
-            video_air_by_nhan_su[nhan_su] = 0
-        video_air_by_nhan_su[nhan_su] += 1
-    
-    print(f"📹 CHENG Video air by nhân sự (tháng air {month}): {video_air_by_nhan_su}")
-    
-    # === Tổng hợp KPI theo nhân sự từ DASHBOARD THÁNG ===
-    # CỘNG TỔNG cả KPI và Air từ tất cả sản phẩm (Tuần 1)
-    
-    kpi_by_nhan_su = {}
-    
-    # Debug: in ra sample record đầu tiên
-    if dashboard_records:
-        sample = dashboard_records[0]
-        print(f"   🔍 CHENG Dashboard sample: nhan_su={sample.get('nhan_su')}, tuan={sample.get('tuan')}, kpi_so_luong={sample.get('kpi_so_luong')}")
-    
-    # Debug: đếm số record theo tuần
-    tuan_dist = {}
-    for r in dashboard_records:
-        tuan = r.get("tuan")
-        tuan_dist[tuan] = tuan_dist.get(tuan, 0) + 1
-    print(f"   📊 CHENG Tuần distribution: {tuan_dist}")
-    
-    for r in dashboard_records:
-        nhan_su = r["nhan_su"]
-        if nhan_su:
-            nhan_su = nhan_su.strip()
-        
-        # CHỈ LẤY TUẦN 1 (hoặc format tương tự)
-        tuan = r.get("tuan")
-        # CHENG có thể dùng format khác: "Tuần 1", "1", "Tuần báo cáo 1", etc.
-        is_tuan_1 = False
-        if tuan:
-            tuan_str = str(tuan).lower()
-            if "1" in tuan_str and ("tuần" in tuan_str or tuan_str == "1"):
-                is_tuan_1 = True
-        
-        if tuan and not is_tuan_1:
-            continue
-        
-        if nhan_su not in kpi_by_nhan_su:
-            kpi_by_nhan_su[nhan_su] = {
-                "kpi_so_luong": 0,
-                "kpi_ngan_sach": 0,
-                "so_luong_air": 0,
-                "ngan_sach_air": 0,
-                "pct_kpi_so_luong": 0,
-                "pct_kpi_ngan_sach": 0,
-            }
-        
-        # CỘNG TỔNG từ tất cả sản phẩm
-        try:
-            kpi_sl = int(r.get("kpi_so_luong") or 0)
-            kpi_ns = int(r.get("kpi_ngan_sach") or 0)
-            sl_air = int(r.get("so_luong_tong_air") or 0)
-            ns_air = int(r.get("ngan_sach_tong_air") or 0)
-            
-            kpi_by_nhan_su[nhan_su]["kpi_so_luong"] += kpi_sl
-            kpi_by_nhan_su[nhan_su]["kpi_ngan_sach"] += kpi_ns
-            kpi_by_nhan_su[nhan_su]["so_luong_air"] += sl_air
-            kpi_by_nhan_su[nhan_su]["ngan_sach_air"] += ns_air
-        except:
-            pass
-    
-    # Tính %
-    for nhan_su, data in kpi_by_nhan_su.items():
-        if data["kpi_so_luong"] > 0:
-            data["pct_kpi_so_luong"] = round(data["so_luong_air"] / data["kpi_so_luong"] * 100, 1)
-        if data["kpi_ngan_sach"] > 0:
-            data["pct_kpi_ngan_sach"] = round(data["ngan_sach_air"] / data["kpi_ngan_sach"] * 100, 1)
-    
-    print(f"📊 CHENG KPI by nhân sự (từ Dashboard): {kpi_by_nhan_su}")
-    
-    # === Tổng hợp liên hệ theo nhân sự ===
-    lien_he_by_nhan_su = {}
-    for r in lien_he_records:
-        nhan_su = r["nhan_su"]
-        if nhan_su:
-            nhan_su = nhan_su.strip()
-        
-        if nhan_su not in lien_he_by_nhan_su:
-            lien_he_by_nhan_su[nhan_su] = {
-                "tong_lien_he": 0,
-                "da_deal": 0,
-                "dang_trao_doi": 0,
-                "tu_choi": 0,
-            }
-        
-        try:
-            lien_he_by_nhan_su[nhan_su]["tong_lien_he"] += int(r.get("tong_lien_he") or 0)
-            lien_he_by_nhan_su[nhan_su]["da_deal"] += int(r.get("da_deal") or 0)
-            lien_he_by_nhan_su[nhan_su]["dang_trao_doi"] += int(r.get("dang_trao_doi") or 0)
-            lien_he_by_nhan_su[nhan_su]["tu_choi"] += int(r.get("tu_choi") or 0)
-        except:
-            pass
-    
-    # Tính tỷ lệ
-    for ns, data in lien_he_by_nhan_su.items():
-        total = data["tong_lien_he"]
-        if total > 0:
-            data["ty_le_deal"] = round(data["da_deal"] / total * 100, 1)
-            data["ty_le_trao_doi"] = round(data["dang_trao_doi"] / total * 100, 1)
-            data["ty_le_tu_choi"] = round(data["tu_choi"] / total * 100, 1)
-        else:
-            data["ty_le_deal"] = 0
-            data["ty_le_trao_doi"] = 0
-            data["ty_le_tu_choi"] = 0
-    
-    # === Tổng quan ===
-    total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
-    total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
-    total_kpi_ngan_sach = sum(d["kpi_ngan_sach"] for d in kpi_by_nhan_su.values())
-    total_ngan_sach_air = sum(d["ngan_sach_air"] for d in kpi_by_nhan_su.values())
-    
-    return {
-        "brand": "CHENG",
-        "month": month,
-        "week": week,
-        "tong_quan": {
-            "kpi_so_luong": total_kpi_so_luong,
-            "so_luong_air": total_so_luong_air,
-            "pct_kpi_so_luong": round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0,
-            "kpi_ngan_sach": total_kpi_ngan_sach,
-            "ngan_sach_air": total_ngan_sach_air,
-            "pct_kpi_ngan_sach": round(total_ngan_sach_air / total_kpi_ngan_sach * 100, 1) if total_kpi_ngan_sach > 0 else 0,
-        },
-        "kpi_nhan_su": kpi_by_nhan_su,
-        "lien_he_nhan_su": lien_he_by_nhan_su,
+    result = {
+        "total_sample": len(records),
+        "fields": {},
+        "sample_records": []
     }
+    
+    if records:
+        all_fields = list(records[0].get("fields", {}).keys())
+        result["all_field_names"] = all_fields
+        
+        for record in records:
+            fields = record.get("fields", {})
+            sample = {}
+            for key, value in fields.items():
+                sample[key] = str(value)[:100] if value else None
+            result["sample_records"].append(sample)
+    
+    return result
+
+async def debug_task_fields():
+    """Debug: Xem tất cả fields từ Task table"""
+    records = await get_all_records(
+        app_token=TASK_BASE["app_token"],
+        table_id=TASK_BASE["table_id"],
+        max_records=3
+    )
+    
+    result = {
+        "total_sample": len(records),
+        "fields": {},
+        "sample_records": []
+    }
+    
+    if records:
+        all_fields = list(records[0].get("fields", {}).keys())
+        result["all_field_names"] = all_fields
+        
+        for record in records:
+            fields = record.get("fields", {})
+            sample = {}
+            for key, value in fields.items():
+                sample[key] = str(value)[:100] if value else None
+            result["sample_records"].append(sample)
+    
+    return result
+
+
+# ============ NOTES FUNCTIONS ============
+async def get_notes_by_chat_id(chat_id: str) -> List[Dict]:
+    """Lấy tất cả notes của một chat"""
+    records = await get_all_records(
+        NOTES_TABLE["app_token"],
+        NOTES_TABLE["table_id"],
+        filter_formula=f'CurrentValue.[chat_id] = "{chat_id}"'
+    )
+    
+    notes = []
+    for r in records:
+        fields = r.get("fields", {})
+        notes.append({
+            "record_id": r.get("record_id"),
+            "chat_id": fields.get("chat_id"),
+            "note_key": fields.get("note_key"),
+            "note_value": fields.get("note_value"),
+            "deadline": fields.get("deadline"),
+            "created_at": fields.get("created_at"),
+        })
+    
+    return notes
+
+
+async def get_note_by_key(chat_id: str, note_key: str) -> Optional[Dict]:
+    """Lấy một note theo key"""
+    records = await get_all_records(
+        NOTES_TABLE["app_token"],
+        NOTES_TABLE["table_id"],
+        filter_formula=f'AND(CurrentValue.[chat_id] = "{chat_id}", CurrentValue.[note_key] = "{note_key}")'
+    )
+    
+    if not records:
+        return None
+    
+    r = records[0]
+    fields = r.get("fields", {})
+    return {
+        "record_id": r.get("record_id"),
+        "chat_id": fields.get("chat_id"),
+        "note_key": fields.get("note_key"),
+        "note_value": fields.get("note_value"),
+        "deadline": fields.get("deadline"),
+        "created_at": fields.get("created_at"),
+    }
+
+
+async def create_note(chat_id: str, note_key: str, note_value: str, deadline: str = None) -> Dict:
+    """Tạo note mới"""
+    fields = {
+        "chat_id": chat_id,
+        "note_key": note_key,
+        "note_value": note_value,
+        "created_at": datetime.now().isoformat(),
+    }
+    
+    if deadline:
+        fields["deadline"] = deadline
+    
+    result = await create_record(
+        NOTES_TABLE["app_token"],
+        NOTES_TABLE["table_id"],
+        fields
+    )
+    
+    return result
+
+
+async def update_note(record_id: str, note_value: str = None, deadline: str = None) -> Dict:
+    """Cập nhật note"""
+    fields = {}
+    
+    if note_value is not None:
+        fields["note_value"] = note_value
+    
+    if deadline is not None:
+        fields["deadline"] = deadline
+    
+    if not fields:
+        return {"error": "No fields to update"}
+    
+    result = await update_record(
+        NOTES_TABLE["app_token"],
+        NOTES_TABLE["table_id"],
+        record_id,
+        fields
+    )
+    
+    return result
+
+
+async def delete_note(record_id: str) -> Dict:
+    """Xóa note"""
+    result = await delete_record(
+        NOTES_TABLE["app_token"],
+        NOTES_TABLE["table_id"],
+        record_id
+    )
+    
+    return result
+
+
+async def debug_notes_table():
+    """Debug: Xem cấu trúc bảng Notes"""
+    records = await get_all_records(
+        app_token=NOTES_TABLE["app_token"],
+        table_id=NOTES_TABLE["table_id"],
+        max_records=5
+    )
+    
+    result = {
+        "table_info": NOTES_TABLE,
+        "total_sample": len(records),
+        "fields": [],
+        "sample_records": []
+    }
+    
+    if records:
+        all_fields = list(records[0].get("fields", {}).keys())
+        result["fields"] = all_fields
+        
+        for record in records:
+            fields = record.get("fields", {})
+            sample = {"record_id": record.get("record_id")}
+            for key, value in fields.items():
+                sample[key] = str(value)[:100] if value else None
+            result["sample_records"].append(sample)
+    
+    return result
