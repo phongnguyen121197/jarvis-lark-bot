@@ -1,6 +1,7 @@
 """
 Intent Classifier Module
 Phân loại câu hỏi của người dùng thành các intent
+Version 5.7.2 - Fixed CHENG staff KPI routing
 """
 import re
 from datetime import datetime, timedelta
@@ -68,7 +69,18 @@ DASHBOARD_KEYWORDS = [
     "cập nhật booking", "cap nhat booking"
 ]
 
-# Danh sách nhân sự booking (để detect tên cụ thể)
+# ============ NHÂN SỰ MAPPING ============
+# Danh sách nhân sự CHENG (để detect và route sang CHENG_REPORT)
+CHENG_NHAN_SU_MAPPING = {
+    "phương": "Phương",
+    "phuong": "Phương",
+    "linh": "Linh",
+    "trang": "Trang",
+    "hằng": "Hằng",
+    "hang": "Hằng",
+}
+
+# Danh sách nhân sự booking KALLE (để detect tên cụ thể)
 NHAN_SU_MAPPING = {
     # Tên thường gọi -> Tên đầy đủ trong Lark
     "trà mi": "Trà Mi - Intern Booking",
@@ -86,7 +98,6 @@ NHAN_SU_MAPPING = {
     "thuy duong": "Lê Thuỳ Dương",
     "vịt": "Lê Thuỳ Dương",
     "vit": "Lê Thuỳ Dương",
-    "linh": "Ngọc Linh - Booking Re...",
     "ngọc linh": "Ngọc Linh - Booking Re...",
     "ngoc linh": "Ngọc Linh - Booking Re...",
     "quân": "Quân",
@@ -326,16 +337,39 @@ def classify_intent(text: str) -> Dict[str, Any]:
                 "original_text": text
             }
     
-    # Detect nhân sự cụ thể
-    nhan_su_detected = None
+    # ========== DETECT NHÂN SỰ CỤ THỂ ==========
+    # Check CHENG staff FIRST
+    cheng_nhan_su_detected = None
+    for short_name, full_name in CHENG_NHAN_SU_MAPPING.items():
+        # Kiểm tra pattern "kpi của X", "kpi X", "X kpi"
+        if short_name in text_lower:
+            # Đảm bảo là từ riêng biệt (không phải substring)
+            pattern = r'\b' + re.escape(short_name) + r'\b'
+            if re.search(pattern, text_lower):
+                cheng_nhan_su_detected = full_name
+                break
+    
+    # Nếu detect được nhân sự CHENG → route sang CHENG_REPORT với nhan_su_filter
+    if cheng_nhan_su_detected and is_dashboard:
+        return {
+            "intent": INTENT_CHENG_REPORT,
+            "month": month if month else current_month,
+            "week": week,
+            "year": year,
+            "report_type": "kpi_ca_nhan",
+            "nhan_su": cheng_nhan_su_detected,
+            "original_text": text
+        }
+    
+    # Check KALLE staff
+    kalle_nhan_su_detected = None
     for short_name, full_name in NHAN_SU_MAPPING.items():
         # Kiểm tra pattern "kpi của X", "kpi X", "X kpi"
         if short_name in text_lower:
             # Đảm bảo là từ riêng biệt (không phải substring)
-            import re
             pattern = r'\b' + re.escape(short_name) + r'\b'
             if re.search(pattern, text_lower):
-                nhan_su_detected = full_name
+                kalle_nhan_su_detected = full_name
                 is_dashboard = True  # Kích hoạt dashboard
                 break
     
@@ -344,7 +378,7 @@ def classify_intent(text: str) -> Dict[str, Any]:
         report_type = "full"  # Mặc định: báo cáo đầy đủ
         
         # Nếu có nhân sự cụ thể -> báo cáo cá nhân
-        if nhan_su_detected:
+        if kalle_nhan_su_detected:
             report_type = "kpi_ca_nhan"
         elif "top koc" in text_lower or "doanh số" in text_lower or "doanh so" in text_lower or "gmv" in text_lower:
             report_type = "top_koc"
@@ -361,7 +395,7 @@ def classify_intent(text: str) -> Dict[str, Any]:
             "week": week,
             "year": year,
             "report_type": report_type,  # "full", "top_koc", "lien_he", "kpi_nhan_su", "kpi_ca_nhan", "canh_bao"
-            "nhan_su": nhan_su_detected,  # Tên nhân sự cụ thể (nếu có)
+            "nhan_su": kalle_nhan_su_detected,  # Tên nhân sự cụ thể (nếu có)
             "original_text": text
         }
     
@@ -473,6 +507,13 @@ def test_classifier():
         "Cho chị list content có từ Noel trong tháng 12",
         "Summary overview tuần này: content + booking",
         "Xin chào Jarvis",
+        # Test CHENG staff detection
+        "KPI của Phương tháng 12",
+        "KPI của Linh",
+        "Jarvis KPI của Trang",
+        # Test KALLE staff detection
+        "KPI của Mai tháng 12",
+        "KPI của Thảo",
     ]
     
     print("=" * 50)
@@ -483,6 +524,8 @@ def test_classifier():
         result = classify_intent(text)
         print(f"\n📝 Input: {text}")
         print(f"🎯 Intent: {result['intent']}")
+        if result.get('nhan_su'):
+            print(f"👤 Nhân sự: {result['nhan_su']}")
         print(f"📊 Params: {result}")
 
 if __name__ == "__main__":

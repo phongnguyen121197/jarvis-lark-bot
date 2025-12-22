@@ -1,7 +1,7 @@
 """
 Notes Manager Module
 Quản lý ghi chú người dùng - lưu trữ trong Lark Bitable
-Version 5.7.0
+Version 5.7.2 - Fixed deadline regex + Calendar integration
 """
 import re
 from typing import Dict, List, Optional, Tuple
@@ -13,7 +13,8 @@ from lark_base import (
     create_note,
     update_note,
     delete_note,
-    debug_notes_table
+    debug_notes_table,
+    create_calendar_event
 )
 
 
@@ -61,7 +62,7 @@ def parse_deadline(text: str) -> Optional[str]:
             target_date = now + timedelta(days=days_ahead)
             return target_date.replace(hour=23, minute=59).isoformat()
     
-    # DD/MM format
+    # DD/MM format - FIXED: greedy pattern to capture full date
     match = re.search(r'(\d{1,2})/(\d{1,2})(?:/(\d{4}))?', text)
     if match:
         day = int(match.group(1))
@@ -120,7 +121,11 @@ class NotesManager:
             line = f"{i}. **{key}**"
             if deadline:
                 try:
-                    dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
+                    # Handle both timestamp (ms) and ISO format
+                    if isinstance(deadline, (int, float)):
+                        dl = datetime.fromtimestamp(deadline / 1000)
+                    else:
+                        dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
                     line += f" (⏰ {dl.strftime('%d/%m')})"
                 except:
                     pass
@@ -131,7 +136,7 @@ class NotesManager:
         return "\n".join(lines), notes
     
     async def add_note(self, content: str, deadline_text: str = None) -> str:
-        """Thêm ghi chú mới"""
+        """Thêm ghi chú mới + tạo Calendar event nếu có deadline"""
         note_key = extract_note_key(content)
         
         # Check existing note with same key
@@ -142,20 +147,42 @@ class NotesManager:
             await update_note(existing["record_id"], content, deadline)
             return f"✏️ Đã cập nhật ghi chú: **{note_key}**"
         
-        # Create new
+        # Parse deadline
         deadline = parse_deadline(deadline_text) if deadline_text else None
+        
+        # Create note in Bitable
         result = await create_note(self.chat_id, note_key, content, deadline)
         
         if "error" in result:
             return f"❌ Lỗi khi lưu ghi chú: {result.get('error')}"
         
         response = f"✅ Đã lưu ghi chú: **{note_key}**"
+        
+        # Create Calendar event if deadline exists
         if deadline:
             try:
                 dl = datetime.fromisoformat(deadline)
                 response += f"\n⏰ Deadline: {dl.strftime('%d/%m/%Y')}"
-            except:
-                pass
+                
+                # Create calendar event at 9:00 AM on deadline date
+                event_start = dl.replace(hour=9, minute=0, second=0, microsecond=0)
+                event_end = event_start + timedelta(hours=1)
+                
+                calendar_result = await create_calendar_event(
+                    summary=f"📝 {note_key}",
+                    start_time=event_start,
+                    end_time=event_end,
+                    description=f"Ghi chú: {content}\n\nDeadline: {dl.strftime('%d/%m/%Y %H:%M')}"
+                )
+                
+                if calendar_result.get("success"):
+                    response += "\n📅 Đã tạo event trong Calendar"
+                else:
+                    print(f"⚠️ Calendar event creation failed: {calendar_result.get('error')}")
+                    # Don't show error to user - note was saved successfully
+            except Exception as e:
+                print(f"⚠️ Calendar event error: {e}")
+                # Don't fail the whole operation
         
         return response
     
@@ -313,24 +340,25 @@ async def handle_notes_intent(chat_id: str, intent: str, message: str) -> str:
         return result
     
     elif intent == "notes_add":
-        # Extract deadline nếu có
+        # Extract deadline nếu có - FIXED: greedy pattern
         deadline_text = None
         deadline_patterns = [
-            r'trước\s+(.+?)(?:\.|$)',
-            r'deadline\s*[:|]\s*(.+?)(?:\.|$)',
-            r'hạn\s+(.+?)(?:\.|$)',
+            r'deadline\s*[:\-]?\s*(.+)$',
+            r'trước\s+(.+)$',
+            r'hạn\s+(.+)$',
         ]
         
         for pattern in deadline_patterns:
             match = re.search(pattern, message.lower())
             if match:
-                deadline_text = match.group(1)
+                deadline_text = match.group(1).strip()
                 break
         
-        # Clean message để lấy nội dung note
+        # Clean message để lấy nội dung note - FIXED: greedy pattern
         content = re.sub(r'(nhớ|ghi nhớ|lưu|note|ghi chú)\s*(rằng|là|:)?\s*', '', message, flags=re.IGNORECASE)
-        content = re.sub(r'trước\s+.+?(?:\.|$)', '', content)
-        content = re.sub(r'deadline\s*[:|]\s*.+?(?:\.|$)', '', content)
+        content = re.sub(r'deadline\s*[:\-]?\s*.+$', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'trước\s+.+$', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'hạn\s+.+$', '', content, flags=re.IGNORECASE)
         content = content.strip()
         
         if not content:
@@ -416,22 +444,24 @@ def check_note_command(text: str) -> Optional[Dict]:
     text_clean = re.sub(r'^@?jarvis\s*', '', text, flags=re.IGNORECASE).strip()
     text_clean_lower = text_clean.lower()
     
-    # 1. Add note
+    # 1. Add note - FIXED: greedy patterns
     add_patterns = [
-        r'^note\s*[:\-]?\s*(.+)',
-        r'^ghi\s*nhớ\s*[:\-]?\s*(.+)',
-        r'^ghi\s*nho\s*[:\-]?\s*(.+)',
-        r'^todo\s*[:\-]?\s*(.+)',
-        r'^nhớ\s*[:\-]?\s*(.+)',
-        r'^nhắc\s*[:\-]?\s*(.+)',
-        r'^vấn\s*đề\s*[:\-]?\s*(.+)',
-        r'^van\s*de\s*[:\-]?\s*(.+)',
+        r'^note\s*[:\-]?\s*(.+)$',
+        r'^ghi\s*nhớ\s*[:\-]?\s*(.+)$',
+        r'^ghi\s*nho\s*[:\-]?\s*(.+)$',
+        r'^todo\s*[:\-]?\s*(.+)$',
+        r'^nhớ\s*[:\-]?\s*(.+)$',
+        r'^nhắc\s*[:\-]?\s*(.+)$',
+        r'^vấn\s*đề\s*[:\-]?\s*(.+)$',
+        r'^van\s*de\s*[:\-]?\s*(.+)$',
     ]
     
     for pattern in add_patterns:
-        match = re.match(pattern, text_clean_lower)
+        match = re.match(pattern, text_clean_lower, re.DOTALL)
         if match:
-            content = text_clean[match.start(1):].strip()
+            # Get original content (preserve case)
+            start_pos = match.start(1)
+            content = text_clean[start_pos:].strip()
             return {"action": "add", "content": content}
     
     # 2. Summary/List notes
@@ -494,18 +524,20 @@ async def handle_note_command(params: Dict, chat_id: str = "default", user_name:
         if not content:
             return "❌ Nội dung ghi chú không được trống"
         
-        # Extract deadline nếu có
+        # Extract deadline nếu có - FIXED: greedy patterns
         deadline_text = None
         deadline_patterns = [
-            r'trước\s+(.+?)(?:\.|$)',
-            r'deadline\s*[:\-]?\s*(.+?)(?:\.|$)',
-            r'hạn\s+(.+?)(?:\.|$)',
+            r'deadline\s*[:\-]?\s*(.+)$',
+            r'trước\s+(.+)$',
+            r'hạn\s+(.+)$',
         ]
         
         for pattern in deadline_patterns:
             match = re.search(pattern, content.lower())
             if match:
-                deadline_text = match.group(1)
+                deadline_text = match.group(1).strip()
+                # Remove deadline part from content
+                content = re.sub(pattern, '', content, flags=re.IGNORECASE).strip()
                 break
         
         return await manager.add_note(content, deadline_text)

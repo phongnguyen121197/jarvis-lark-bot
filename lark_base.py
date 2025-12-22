@@ -1,11 +1,12 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
-Version 5.7.0 - Fixed CHENG field names
+Version 5.7.2 - Added Calendar integration, fixed datetime format
 """
 import os
 import re
 import httpx
+import aiohttp
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 
@@ -93,6 +94,70 @@ NOTES_TABLE = {
 
 # === CALENDAR CONFIG ===
 JARVIS_CALENDAR_ID = "7585485663517069021"
+
+
+async def create_calendar_event(
+    summary: str,
+    start_time: datetime,
+    end_time: datetime = None,
+    description: str = None,
+    calendar_id: str = None
+) -> Dict:
+    """
+    Tạo event trong Lark Calendar
+    
+    Args:
+        summary: Tiêu đề event
+        start_time: Thời gian bắt đầu (datetime object)
+        end_time: Thời gian kết thúc (mặc định = start_time + 1 hour)
+        description: Mô tả chi tiết
+        calendar_id: ID calendar (mặc định dùng JARVIS_CALENDAR_ID)
+    
+    Returns:
+        Dict với event_id nếu thành công, hoặc error
+    """
+    token = await get_tenant_access_token()
+    cal_id = calendar_id or JARVIS_CALENDAR_ID
+    
+    if end_time is None:
+        end_time = start_time + timedelta(hours=1)
+    
+    # Convert to timestamp (seconds)
+    start_ts = int(start_time.timestamp())
+    end_ts = int(end_time.timestamp())
+    
+    url = f"https://open.larksuite.com/open-apis/calendar/v4/calendars/{cal_id}/events"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "summary": summary,
+        "start_time": {
+            "timestamp": str(start_ts)
+        },
+        "end_time": {
+            "timestamp": str(end_ts)
+        }
+    }
+    
+    if description:
+        payload["description"] = description
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as resp:
+            result = await resp.json()
+            
+            if result.get("code") != 0:
+                print(f"❌ Calendar event error: {result}")
+                return {"error": result.get("msg", "Unknown error"), "code": result.get("code")}
+            
+            event_id = result.get("data", {}).get("event", {}).get("event_id")
+            print(f"✅ Calendar event created: {event_id}")
+            return {"success": True, "event_id": event_id}
+
 
 # ============ AUTH ============
 _token_cache = {
@@ -2082,7 +2147,16 @@ async def update_note(record_id: str, note_value: str = None, deadline: str = No
         fields["note_value"] = note_value
     
     if deadline is not None:
-        fields["deadline"] = deadline
+        # Convert deadline to timestamp
+        try:
+            from dateutil import parser
+            deadline_dt = parser.parse(deadline)
+            fields["deadline"] = int(deadline_dt.timestamp() * 1000)
+        except:
+            try:
+                fields["deadline"] = int(float(deadline) * 1000) if float(deadline) < 2000000000 else int(deadline)
+            except:
+                pass
     
     if not fields:
         return {"error": "No fields to update"}
