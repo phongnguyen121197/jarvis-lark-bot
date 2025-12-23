@@ -71,13 +71,48 @@ DASHBOARD_KEYWORDS = [
 
 # ============ NHÂN SỰ MAPPING ============
 # Danh sách nhân sự CHENG (để detect và route sang CHENG_REPORT)
+# Updated v5.7.3 - Danh sách đầy đủ từ bảng CHENG Dashboard
 CHENG_NHAN_SU_MAPPING = {
-    "phương": "Phương",
+    # Tên đơn - sẽ được match thêm trong report_generator
+    "phương": "Phương",  # Could be Phương Anh or Nguyên Phương
     "phuong": "Phương",
-    "linh": "Linh",
-    "trang": "Trang",
-    "hằng": "Hằng",
-    "hang": "Hằng",
+    # Phương Anh (specific)
+    "phương anh": "Phương Anh",
+    "phuong anh": "Phương Anh",
+    # Nguyên Phương (specific)
+    "nguyên phương": "Nguyên Phương",
+    "nguyen phuong": "Nguyên Phương",
+    "nguyên": "Nguyên Phương",
+    "nguyen": "Nguyên Phương",
+    # Trà Mi CHENG
+    "trà mi cheng": "Trà Mi",
+    # Quỳnh Anh
+    "quỳnh anh": "Quỳnh Anh",
+    "quynh anh": "Quỳnh Anh",
+    "quỳnh": "Quỳnh Anh",
+    "quynh": "Quỳnh Anh",
+    # Thanh Nhàn
+    "thanh nhàn": "Thanh Nhàn",
+    "thanh nhan": "Thanh Nhàn",
+    "nhàn": "Thanh Nhàn",
+    "nhan": "Thanh Nhàn",
+    # Thanh Ngân  
+    "thanh ngân": "Thanh Ngân",
+    "thanh ngan": "Thanh Ngân",
+    "ngân": "Thanh Ngân",
+    "ngan": "Thanh Ngân",
+    # Hạnh Diệu
+    "hạnh diệu": "Ngô Hạnh Diệu",
+    "hanh dieu": "Ngô Hạnh Diệu",
+    "diệu": "Ngô Hạnh Diệu",
+    "dieu": "Ngô Hạnh Diệu",
+    # Trà Giang
+    "trà giang": "Trà Giang",
+    "tra giang": "Trà Giang",
+    "giang": "Trà Giang",
+    # Hải Anh
+    "hải anh": "Hải Anh",
+    "hai anh": "Hải Anh",
 }
 
 # Danh sách nhân sự booking KALLE (để detect tên cụ thể)
@@ -338,16 +373,30 @@ def classify_intent(text: str) -> Dict[str, Any]:
             }
     
     # ========== DETECT NHÂN SỰ CỤ THỂ ==========
-    # Check CHENG staff FIRST
-    cheng_nhan_su_detected = None
-    for short_name, full_name in CHENG_NHAN_SU_MAPPING.items():
-        # Kiểm tra pattern "kpi của X", "kpi X", "X kpi"
+    # IMPORTANT: Sort by length descending to prioritize longer matches first
+    # This prevents "phương" matching when "phương thảo" was intended
+    
+    # Check KALLE staff FIRST (because has longer specific names like "phương thảo")
+    kalle_nhan_su_detected = None
+    sorted_kalle_mapping = sorted(NHAN_SU_MAPPING.items(), key=lambda x: len(x[0]), reverse=True)
+    for short_name, full_name in sorted_kalle_mapping:
         if short_name in text_lower:
-            # Đảm bảo là từ riêng biệt (không phải substring)
             pattern = r'\b' + re.escape(short_name) + r'\b'
             if re.search(pattern, text_lower):
-                cheng_nhan_su_detected = full_name
+                kalle_nhan_su_detected = full_name
+                is_dashboard = True
                 break
+    
+    # Check CHENG staff (only if no KALLE match found)
+    cheng_nhan_su_detected = None
+    if not kalle_nhan_su_detected:
+        sorted_cheng_mapping = sorted(CHENG_NHAN_SU_MAPPING.items(), key=lambda x: len(x[0]), reverse=True)
+        for short_name, full_name in sorted_cheng_mapping:
+            if short_name in text_lower:
+                pattern = r'\b' + re.escape(short_name) + r'\b'
+                if re.search(pattern, text_lower):
+                    cheng_nhan_su_detected = full_name
+                    break
     
     # Nếu detect được nhân sự CHENG → route sang CHENG_REPORT với nhan_su_filter
     if cheng_nhan_su_detected and is_dashboard:
@@ -361,17 +410,7 @@ def classify_intent(text: str) -> Dict[str, Any]:
             "original_text": text
         }
     
-    # Check KALLE staff
-    kalle_nhan_su_detected = None
-    for short_name, full_name in NHAN_SU_MAPPING.items():
-        # Kiểm tra pattern "kpi của X", "kpi X", "X kpi"
-        if short_name in text_lower:
-            # Đảm bảo là từ riêng biệt (không phải substring)
-            pattern = r'\b' + re.escape(short_name) + r'\b'
-            if re.search(pattern, text_lower):
-                kalle_nhan_su_detected = full_name
-                is_dashboard = True  # Kích hoạt dashboard
-                break
+    # KALLE staff already checked above - no need to duplicate
     
     if is_dashboard:
         # Xác định loại báo cáo dashboard

@@ -158,31 +158,15 @@ class NotesManager:
         
         response = f"✅ Đã lưu ghi chú: **{note_key}**"
         
-        # Create Calendar event if deadline exists
+        # Show deadline if exists (Calendar disabled - invalid calendar_id)
         if deadline:
             try:
                 dl = datetime.fromisoformat(deadline)
                 response += f"\n⏰ Deadline: {dl.strftime('%d/%m/%Y')}"
-                
-                # Create calendar event at 9:00 AM on deadline date
-                event_start = dl.replace(hour=9, minute=0, second=0, microsecond=0)
-                event_end = event_start + timedelta(hours=1)
-                
-                calendar_result = await create_calendar_event(
-                    summary=f"📝 {note_key}",
-                    start_time=event_start,
-                    end_time=event_end,
-                    description=f"Ghi chú: {content}\n\nDeadline: {dl.strftime('%d/%m/%Y %H:%M')}"
-                )
-                
-                if calendar_result.get("success"):
-                    response += "\n📅 Đã tạo event trong Calendar"
-                else:
-                    print(f"⚠️ Calendar event creation failed: {calendar_result.get('error')}")
-                    # Don't show error to user - note was saved successfully
+                # Note: Calendar event disabled - Calendar ID invalid
+                # Todo: Tạo task trong Bitable Task table nếu cần
             except Exception as e:
-                print(f"⚠️ Calendar event error: {e}")
-                # Don't fail the whole operation
+                print(f"⚠️ Deadline parse error: {e}")
         
         return response
     

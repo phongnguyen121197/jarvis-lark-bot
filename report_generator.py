@@ -237,15 +237,43 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: 
         lines.append(f"📅 Tháng {month}{week_text}")
         lines.append("")
         
+        # IMPROVED MATCHING LOGIC v5.7.3
+        # Priority: 1) Exact prefix match, 2) Word boundary match, 3) Contains match
         found_kpi = None
+        filter_lower = nhan_su_filter.lower().strip()
+        
+        # First pass: Find prefix match (tên bắt đầu bằng filter)
         for ns, data in kpi_nhan_su.items():
-            if nhan_su_filter.lower() in ns.lower() or ns.lower() in nhan_su_filter.lower():
+            ns_lower = ns.lower()
+            # Check if name starts with filter (ignoring "CHENG " prefix)
+            ns_clean = ns_lower.replace("cheng ", "").strip()
+            if ns_clean.startswith(filter_lower):
                 found_kpi = (ns, data)
                 break
         
+        # Second pass: Find word boundary match
+        if not found_kpi:
+            import re
+            for ns, data in kpi_nhan_su.items():
+                ns_lower = ns.lower()
+                # Match as a complete word
+                if re.search(rf'\b{re.escape(filter_lower)}\b', ns_lower):
+                    found_kpi = (ns, data)
+                    break
+        
+        # Third pass: Contains match (fallback)
+        if not found_kpi:
+            for ns, data in kpi_nhan_su.items():
+                if filter_lower in ns.lower():
+                    found_kpi = (ns, data)
+                    break
+        
+        # Find liên hệ data (same logic)
         found_lh = None
         for ns, data in lien_he_nhan_su.items():
-            if nhan_su_filter.lower() in ns.lower() or ns.lower() in nhan_su_filter.lower():
+            ns_lower = ns.lower()
+            ns_clean = ns_lower.replace("cheng ", "").strip()
+            if ns_clean.startswith(filter_lower) or filter_lower in ns_lower:
                 found_lh = (ns, data)
                 break
         
