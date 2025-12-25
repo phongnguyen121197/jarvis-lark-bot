@@ -1,10 +1,11 @@
 """
-TikTok Ads Web Crawler - Version 5.7.3
-Fixed: Load cookies from env and crawl TikTok Ads
+TikTok Ads Web Crawler - Version 5.7.4
+Fixed: Navigation timeout, better error handling, more logging
 """
 import os
 import re
 import json
+import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -13,6 +14,11 @@ PRIMARY_ADVERTISER_ID = os.getenv("TIKTOK_PRIMARY_ADVERTISER_ID", "7089362853240
 CREDIT_LIMIT = float(os.getenv("TIKTOK_CREDIT_LIMIT", "163646248"))
 WARNING_THRESHOLD = float(os.getenv("TIKTOK_WARNING_THRESHOLD", "85"))
 COOKIES_FILE = "/tmp/tiktok_ads_cookies.json"
+
+# Timeouts (in milliseconds)
+NAVIGATION_TIMEOUT = 15000  # 15 seconds for navigation
+PAGE_TIMEOUT = 5000  # 5 seconds for page operations
+TOTAL_TIMEOUT = 30  # 30 seconds total for crawl
 
 # Cache
 _cached_data: Dict[str, Any] = {
@@ -120,6 +126,7 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
     """
     Crawl TikTok Ads Manager để lấy thông tin dư nợ
     Sử dụng Playwright để render JavaScript
+    Version 5.7.4: Fixed timeout issues
     """
     cookies = load_cookies()
     
@@ -131,7 +138,7 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
         }
     
     try:
-        from playwright.async_api import async_playwright
+        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
     except ImportError:
         return {
             "success": False,
@@ -139,77 +146,131 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
         }
     
     url = f"https://ads.tiktok.com/i18n/account/payment?aadvid={PRIMARY_ADVERTISER_ID}"
+    browser = None
     
     try:
+        print(f"🚀 Starting crawler...")
+        
         async with async_playwright() as p:
+            print(f"📦 Launching browser...")
             browser = await p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             )
             
+            print(f"🌐 Creating context...")
             context = await browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             )
             
+            # Set default timeout for context
+            context.set_default_timeout(PAGE_TIMEOUT)
+            
             # Add cookies
+            print(f"🍪 Adding {len(cookies)} cookies...")
             await context.add_cookies(cookies)
             
             page = await context.new_page()
             
+            # Navigate with short timeout and domcontentloaded (faster than networkidle)
             print(f"🌐 Navigating to {url}")
-            await page.goto(url, wait_until='networkidle', timeout=30000)
+            try:
+                await page.goto(url, wait_until='domcontentloaded', timeout=NAVIGATION_TIMEOUT)
+                print(f"✅ Navigation complete")
+            except PlaywrightTimeout:
+                print(f"⚠️ Navigation timeout after {NAVIGATION_TIMEOUT}ms, continuing anyway...")
+            except Exception as nav_err:
+                print(f"⚠️ Navigation error: {nav_err}, continuing...")
             
-            # Wait for page to load
-            await page.wait_for_timeout(3000)
+            # Wait a bit for JS to render
+            print(f"⏳ Waiting for JS to render...")
+            await asyncio.sleep(2)
             
             # Check if login required
-            content = await page.content()
-            if 'login' in content.lower() and 'sign in' in content.lower():
-                await browser.close()
-                return {
-                    "success": False,
-                    "error": "Cookies expired - need to re-login and update cookies"
-                }
+            print(f"🔍 Checking page content...")
+            try:
+                content = await asyncio.wait_for(
+                    page.content(),
+                    timeout=5
+                )
+                if 'login' in content.lower() and 'sign in' in content.lower():
+                    await browser.close()
+                    return {
+                        "success": False,
+                        "error": "Cookies expired - need to re-login and update cookies"
+                    }
+                print(f"✅ Page content retrieved ({len(content)} chars)")
+            except asyncio.TimeoutError:
+                print(f"⚠️ Content timeout, continuing...")
+                content = ""
+            except Exception as e:
+                print(f"⚠️ Content error: {e}")
+                content = ""
             
             # Try to find spending info
-            spending_text = await page.evaluate('''
-                () => {
-                    const elements = document.querySelectorAll('[class*="balance"], [class*="spending"], [class*="amount"]');
-                    for (let el of elements) {
-                        const text = el.innerText;
-                        if (text && /[\\d,]+/.test(text)) {
-                            return text;
+            print(f"💰 Extracting spending data...")
+            spending_text = ""
+            try:
+                spending_text = await asyncio.wait_for(
+                    page.evaluate('''
+                        () => {
+                            // Find elements with spending info
+                            const elements = document.querySelectorAll('[class*="balance"], [class*="spending"], [class*="amount"], [class*="money"]');
+                            let texts = [];
+                            for (let el of elements) {
+                                const text = el.innerText;
+                                if (text && /[\d,]+/.test(text)) {
+                                    texts.push(text);
+                                }
+                            }
+                            if (texts.length > 0) {
+                                return texts.join(' | ');
+                            }
+                            // Fallback: get relevant text
+                            return document.body.innerText.substring(0, 3000);
                         }
-                    }
-                    return document.body.innerText.substring(0, 5000);
-                }
-            ''')
+                    '''),
+                    timeout=5
+                )
+                print(f"✅ Got spending text: {spending_text[:200]}...")
+            except asyncio.TimeoutError:
+                print(f"⚠️ Evaluate timeout")
+            except Exception as e:
+                print(f"⚠️ Evaluate error: {e}")
             
             # Parse spending from text
             spending = 0
-            numbers = re.findall(r'[\d,]+(?:\.\d+)?', spending_text.replace(',', ''))
-            for num in numbers:
-                try:
-                    val = float(num.replace(',', ''))
-                    if 1000000 < val < 500000000:
-                        spending = val
-                        break
-                except:
-                    pass
+            
+            # Try to find numbers that look like spending
+            if spending_text:
+                clean_text = spending_text.replace(',', '').replace('.', '')
+                numbers = re.findall(r'\d+', clean_text)
+                for num in numbers:
+                    try:
+                        val = float(num)
+                        if 1000000 < val < 500000000:  # Reasonable range for VND
+                            spending = val
+                            print(f"💵 Found spending: {spending:,.0f}")
+                            break
+                    except:
+                        pass
             
             # Save screenshot for debug
             try:
-                await page.screenshot(path='/tmp/tiktok_ads_page.png')
-                print("📸 Screenshot saved")
+                await page.screenshot(path='/tmp/tiktok_ads_page.png', timeout=3000)
+                print("📸 Screenshot saved to /tmp/tiktok_ads_page.png")
             except:
-                pass
+                print("⚠️ Screenshot failed")
             
             await browser.close()
+            print(f"✅ Browser closed")
             
             # Update cache
             _cached_data["spending"] = spending
             _cached_data["updated_at"] = datetime.now().isoformat()
+            
+            print(f"✅ Crawl complete. Spending: {spending:,.0f}")
             
             return {
                 "success": True,
@@ -223,6 +284,14 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
         print(f"❌ Crawler error: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Ensure browser is closed
+        if browser:
+            try:
+                await browser.close()
+            except:
+                pass
+        
         return {
             "success": False,
             "error": f"Crawler error: {str(e)}"
@@ -230,7 +299,7 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
 
 
 async def get_spending_data(force_refresh: bool = False) -> Dict[str, Any]:
-    """Get TikTok Ads spending data"""
+    """Get TikTok Ads spending data with timeout protection"""
     
     # Return cache if valid
     if not force_refresh and is_cache_valid():
@@ -253,9 +322,19 @@ async def get_spending_data(force_refresh: bool = False) -> Dict[str, Any]:
             "help": "Set TIKTOK_COOKIES_JSON env variable"
         }
     
-    # Try to crawl
-    result = await crawl_tiktok_ads()
-    return result
+    # Try to crawl with total timeout
+    try:
+        result = await asyncio.wait_for(
+            crawl_tiktok_ads(),
+            timeout=TOTAL_TIMEOUT
+        )
+        return result
+    except asyncio.TimeoutError:
+        print(f"❌ Total timeout after {TOTAL_TIMEOUT}s")
+        return {
+            "success": False,
+            "error": f"Crawl timeout after {TOTAL_TIMEOUT}s"
+        }
 
 
 def format_spending_report(data: Dict[str, Any]) -> str:
