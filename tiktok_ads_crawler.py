@@ -1,6 +1,6 @@
 """
-TikTok Ads Web Crawler - Version 5.7.6
-Fixed: Simplified selector + multi-strategy parsing + better logging
+TikTok Ads Web Crawler - Version 5.7.7
+Fixed: Increased wait time + retry logic for content loading
 """
 import os
 import re
@@ -158,12 +158,22 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
             page = await context.new_page()
             
             print(f"🌐 Navigating to {url}")
-            # v5.7.5: Use domcontentloaded instead of networkidle to avoid timeout
+            # v5.7.7: Use domcontentloaded instead of networkidle to avoid timeout
             await page.goto(url, wait_until='domcontentloaded', timeout=15000)
             
-            # Wait for JS to render spending data
+            # Wait for JS to render spending data - increased to 8s
             print("⏳ Waiting for JS to render...")
-            await page.wait_for_timeout(5000)
+            await page.wait_for_timeout(8000)
+            
+            # Additional wait: check if spending data is loaded
+            spending_text = ""
+            for attempt in range(3):
+                spending_text = await page.evaluate('() => document.body.innerText')
+                if 'Spending' in spending_text or 'VND' in spending_text or len(spending_text) > 1000:
+                    print(f"✅ Content loaded after {attempt + 1} attempt(s)")
+                    break
+                print(f"⏳ Attempt {attempt + 1}: Content not ready, waiting 3s more...")
+                await page.wait_for_timeout(3000)
             
             # Check if login required
             content = await page.content()
@@ -174,17 +184,13 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
                     "error": "Cookies expired - need to re-login and update cookies"
                 }
             
-            # v5.7.6: Simplified - just get body text and parse in Python
-            print("🔍 Extracting page content...")
-            spending_text = await page.evaluate('() => document.body.innerText')
-            
-            # Log page title and content length for debugging
+            # v5.7.7: Log content info for debugging
             page_title = await page.title()
             print(f"📄 Page title: {page_title}")
             print(f"📏 Content length: {len(spending_text)} chars")
             
-            # Log first 500 chars to see what we got
-            print(f"📝 Content preview: {spending_text[:500]}")
+            # Log first 300 chars to see what we got
+            print(f"📝 Content preview: {spending_text[:300]}")
             
             # Parse spending from text - v5.7.6 multi-strategy parsing
             spending = 0
