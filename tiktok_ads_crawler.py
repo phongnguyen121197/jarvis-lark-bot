@@ -158,22 +158,34 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
             page = await context.new_page()
             
             print(f"🌐 Navigating to {url}")
-            # v5.7.7: Use domcontentloaded instead of networkidle to avoid timeout
-            await page.goto(url, wait_until='domcontentloaded', timeout=15000)
+            # v5.7.8: Use networkidle for better content loading
+            try:
+                await page.goto(url, wait_until='networkidle', timeout=30000)
+                print("✅ Navigation complete (networkidle)")
+            except Exception as nav_err:
+                print(f"⚠️ networkidle timeout, trying domcontentloaded: {nav_err}")
+                await page.goto(url, wait_until='domcontentloaded', timeout=15000)
             
-            # Wait for JS to render spending data - increased to 8s
-            print("⏳ Waiting for JS to render...")
-            await page.wait_for_timeout(8000)
+            # v5.7.8: Wait longer for JS to render spending data - 15s
+            print("⏳ Waiting 15s for JS to render...")
+            await page.wait_for_timeout(15000)
             
-            # Additional wait: check if spending data is loaded
+            # v5.7.8: Check content with 5 attempts, 5s each
             spending_text = ""
-            for attempt in range(3):
+            for attempt in range(5):
                 spending_text = await page.evaluate('() => document.body.innerText')
-                if 'Spending' in spending_text or 'VND' in spending_text or len(spending_text) > 1000:
-                    print(f"✅ Content loaded after {attempt + 1} attempt(s)")
+                content_len = len(spending_text)
+                has_spending = 'Spending' in spending_text
+                has_vnd = 'VND' in spending_text
+                
+                print(f"📊 Attempt {attempt + 1}: len={content_len}, has_Spending={has_spending}, has_VND={has_vnd}")
+                
+                if has_spending or has_vnd or content_len > 1000:
+                    print(f"✅ Content loaded after {attempt + 1} attempt(s), {content_len} chars")
                     break
-                print(f"⏳ Attempt {attempt + 1}: Content not ready, waiting 3s more...")
-                await page.wait_for_timeout(3000)
+                    
+                print(f"⏳ Content not ready, waiting 5s more...")
+                await page.wait_for_timeout(5000)
             
             # Check if login required
             content = await page.content()
