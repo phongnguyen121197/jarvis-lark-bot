@@ -1,6 +1,6 @@
 """
-TikTok Ads Web Crawler - Version 5.7.7
-Fixed: Increased wait time + retry logic for content loading
+TikTok Ads Web Crawler - Version 5.7.11
+Self-healing: Auto-retry, auto-increase wait, detailed diagnostics
 """
 import os
 import re
@@ -187,14 +187,10 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
                 print(f"⏳ Content not ready, waiting 5s more...")
                 await page.wait_for_timeout(5000)
             
-            # Check if login required
+            # v5.7.10: No login check - just rely on parsing result
+            # If we can parse spending > 0, we're good. If not, report error at the end.
             content = await page.content()
-            if 'login' in content.lower() and 'sign in' in content.lower():
-                await browser.close()
-                return {
-                    "success": False,
-                    "error": "Cookies expired - need to re-login and update cookies"
-                }
+            print(f"🔗 Current URL: {page.url}")
             
             # v5.7.7: Log content info for debugging
             page_title = await page.title()
@@ -255,8 +251,86 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
                     except:
                         pass
             
+            # v5.7.11: Self-healing diagnostic when spending = 0
             if spending == 0:
-                print(f"⚠️ Could not parse spending. Content sample: {spending_text[:300]}")
+                print(f"⚠️ Could not parse spending. Running diagnostics...")
+                
+                # Diagnostic data
+                diag = {
+                    "content_length": len(spending_text),
+                    "current_url": page.url,
+                    "page_title": page_title,
+                    "has_spending_keyword": "Spending" in spending_text or "spending" in spending_text,
+                    "has_vnd_keyword": "VND" in spending_text,
+                    "has_login_in_url": "login" in page.url.lower(),
+                    "content_preview": spending_text[:500]
+                }
+                
+                # Auto-diagnose and suggest fix
+                diagnosis = []
+                suggested_action = ""
+                
+                # Case 1: Redirected to login page
+                if diag["has_login_in_url"]:
+                    diagnosis.append("🔴 Redirected to login page")
+                    suggested_action = "COOKIES_EXPIRED"
+                
+                # Case 2: Page loaded but no spending data
+                elif diag["content_length"] > 500 and not diag["has_spending_keyword"]:
+                    diagnosis.append("🟡 Page loaded but no spending keyword found")
+                    diagnosis.append("   Possible: Wrong page or TikTok changed structure")
+                    suggested_action = "CHECK_PAGE_STRUCTURE"
+                
+                # Case 3: Page has spending keyword but parsing failed
+                elif diag["has_spending_keyword"] and not diag["has_vnd_keyword"]:
+                    diagnosis.append("🟡 Found 'Spending' but no VND amount")
+                    diagnosis.append("   Possible: Page still loading or format changed")
+                    suggested_action = "RETRY_LATER"
+                
+                # Case 4: Content too short - page didn't load
+                elif diag["content_length"] < 500:
+                    diagnosis.append("🔴 Content too short - page didn't fully load")
+                    diagnosis.append("   Possible: Network slow or cookies expired")
+                    suggested_action = "COOKIES_EXPIRED_OR_NETWORK"
+                
+                # Case 5: Has VND but couldn't parse - regex issue
+                elif diag["has_vnd_keyword"]:
+                    diagnosis.append("🟡 Found VND but couldn't parse amount")
+                    diagnosis.append("   Possible: Number format changed")
+                    suggested_action = "PARSING_ISSUE"
+                
+                # Default
+                else:
+                    diagnosis.append("🟡 Unknown issue")
+                    suggested_action = "RETRY_LATER"
+                
+                # Log diagnostics
+                print("=" * 50)
+                print("🔍 DIAGNOSTIC REPORT:")
+                for d in diagnosis:
+                    print(f"   {d}")
+                print(f"📊 Content length: {diag['content_length']}")
+                print(f"🔗 URL: {diag['current_url']}")
+                print(f"💡 Suggested action: {suggested_action}")
+                print("=" * 50)
+                
+                await browser.close()
+                
+                # Return detailed error based on diagnosis
+                error_messages = {
+                    "COOKIES_EXPIRED": "Cookies đã hết hạn - cần đăng nhập lại TikTok Ads và cập nhật cookies",
+                    "COOKIES_EXPIRED_OR_NETWORK": "Không thể tải trang - có thể cookies hết hạn hoặc mạng chậm. Hãy thử lại sau hoặc cập nhật cookies",
+                    "CHECK_PAGE_STRUCTURE": "Trang đã load nhưng không tìm thấy dữ liệu spending - có thể TikTok đã thay đổi giao diện",
+                    "RETRY_LATER": "Không thể lấy dữ liệu - hãy thử lại sau vài phút",
+                    "PARSING_ISSUE": "Tìm thấy dữ liệu VND nhưng không thể phân tích - format có thể đã thay đổi"
+                }
+                
+                return {
+                    "success": False,
+                    "error": error_messages.get(suggested_action, "Lỗi không xác định"),
+                    "diagnosis": suggested_action,
+                    "debug": diag
+                }
             
             # Save screenshot for debug
             try:
@@ -271,6 +345,7 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
             _cached_data["spending"] = spending
             _cached_data["updated_at"] = datetime.now().isoformat()
             
+            print(f"✅ Successfully got spending: {spending:,.0f} VND")
             return {
                 "success": True,
                 "spending": spending,
