@@ -646,16 +646,15 @@ async def check_and_send_reminders():
 _tiktok_warning_sent_today = {"date": None, "sent": False}
 
 async def check_tiktok_ads_warning():
+    """
+    Scheduled check for TikTok Ads spending
+    - Always sends a status report every 3 days
+    - Sends urgent warning if ratio >= threshold
+    """
     if not TIKTOK_ALERT_CHAT_ID:
         return
     
-    from datetime import date
-    today = date.today().isoformat()
-    if _tiktok_warning_sent_today["date"] == today and _tiktok_warning_sent_today["sent"]:
-        print("⏭️ TikTok warning already sent today, skipping")
-        return
-    
-    print("🔍 Checking TikTok Ads spending threshold...")
+    print("🔍 Scheduled TikTok Ads check running...")
     
     try:
         from tiktok_ads_crawler import get_spending_data, WARNING_THRESHOLD, format_spending_report
@@ -669,20 +668,31 @@ async def check_tiktok_ads_warning():
             print(f"📊 Current ratio: {ratio:.1f}% (threshold: {WARNING_THRESHOLD}%)")
             
             if ratio >= WARNING_THRESHOLD:
+                # Urgent warning
                 warning_msg = (
                     f"🚨 **CẢNH BÁO DƯ NỢ TIKTOK ADS**\n\n"
                     f"⚠️ Đã sử dụng **{ratio:.1f}%** hạn mức!\n\n"
                     f"💳 Dư nợ: **{spending:,.0f}** / {credit_limit:,.0f} VND\n"
-                    f"📅 Ngày thanh toán: {result.get('next_billing_date', 'N/A')}\n\n"
+                    f"📅 Cập nhật: {result.get('updated_at', 'N/A')}\n\n"
                     f"💡 Vui lòng chuẩn bị thanh toán hoặc tăng hạn mức."
                 )
                 await send_lark_message(TIKTOK_ALERT_CHAT_ID, warning_msg)
-                print(f"⚠️ Sent TikTok warning to Digital group (ratio: {ratio:.1f}%)")
-                _tiktok_warning_sent_today["date"] = today
-                _tiktok_warning_sent_today["sent"] = True
+                print(f"🚨 Sent URGENT TikTok warning (ratio: {ratio:.1f}%)")
             else:
-                print(f"✅ TikTok spending OK: {ratio:.1f}% < {WARNING_THRESHOLD}%")
+                # Regular status report (every 3 days)
+                status_msg = (
+                    f"📊 **Báo cáo định kỳ TikTok Ads**\n\n"
+                    f"💳 Dư nợ hiện tại: **{spending:,.0f}** VND\n"
+                    f"📈 Đã sử dụng: **{ratio:.1f}%** hạn mức\n"
+                    f"🏦 Hạn mức: {credit_limit:,.0f} VND\n"
+                    f"📅 Cập nhật: {result.get('updated_at', 'N/A')}\n\n"
+                    f"✅ Mức sử dụng an toàn (< {WARNING_THRESHOLD}%)"
+                )
+                await send_lark_message(TIKTOK_ALERT_CHAT_ID, status_msg)
+                print(f"📊 Sent periodic TikTok status report (ratio: {ratio:.1f}%)")
         else:
+            error_msg = f"❌ Không thể kiểm tra TikTok Ads: {result.get('error')}"
+            await send_lark_message(TIKTOK_ALERT_CHAT_ID, error_msg)
             print(f"❌ Failed to get TikTok data: {result.get('error')}")
     except Exception as e:
         print(f"❌ TikTok warning check error: {e}")
@@ -705,14 +715,16 @@ async def startup_event():
         replace_existing=True
     )
     if TIKTOK_ALERT_CHAT_ID:
-        from apscheduler.triggers.interval import IntervalTrigger
+        # v5.7.6: Use CronTrigger instead of IntervalTrigger
+        # CronTrigger won't reset when container restarts
+        # Run every Monday and Thursday at 9:00 AM (approx every 3 days)
         scheduler.add_job(
             check_tiktok_ads_warning,
-            IntervalTrigger(hours=72, timezone=TIMEZONE),
+            CronTrigger(day_of_week="mon,thu", hour=9, minute=0, timezone=TIMEZONE),
             id="tiktok_ads_warning",
             replace_existing=True
         )
-        print(f"⚠️ TikTok Ads warning check scheduled (every 72 hours)")
+        print(f"📊 TikTok Ads scheduled check: Monday & Thursday at 9:00 AM")
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
 

@@ -1,6 +1,6 @@
 """
-TikTok Ads Web Crawler - Version 5.7.5
-Fixed: Improved selector to find correct spending amount (not "Preview")
+TikTok Ads Web Crawler - Version 5.7.6
+Fixed: Simplified selector + multi-strategy parsing + better logging
 """
 import os
 import re
@@ -174,94 +174,71 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
                     "error": "Cookies expired - need to re-login and update cookies"
                 }
             
-            # Try to find spending info - v5.7.5 improved selector
-            spending_text = await page.evaluate('''
-                () => {
-                    const bodyText = document.body.innerText;
-                    
-                    // Strategy 1: Look for "Spending so far" pattern (exact match from screenshot)
-                    const spendingMatch = bodyText.match(/Spending so far[^\\d]*(\\d[\\d,\\.]+)/i);
-                    if (spendingMatch) {
-                        console.log("Found via 'Spending so far':", spendingMatch[0]);
-                        return spendingMatch[0];
-                    }
-                    
-                    // Strategy 2: Look for "billing cycle" pattern
-                    const billingMatch = bodyText.match(/billing cycle[^\\d]*(\\d[\\d,\\.]+)/i);
-                    if (billingMatch) {
-                        console.log("Found via 'billing cycle':", billingMatch[0]);
-                        return billingMatch[0];
-                    }
-                    
-                    // Strategy 3: Look for large VND amounts (spending is usually millions)
-                    const vndMatches = bodyText.match(/(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)\\s*VND/g);
-                    if (vndMatches && vndMatches.length > 0) {
-                        // Return the largest VND amount (most likely spending)
-                        let maxAmount = 0;
-                        let maxMatch = "";
-                        for (const m of vndMatches) {
-                            const numStr = m.replace(/[^\\d]/g, '');
-                            const val = parseInt(numStr);
-                            if (val > maxAmount && val > 1000000) {
-                                maxAmount = val;
-                                maxMatch = m;
-                            }
-                        }
-                        if (maxMatch) {
-                            console.log("Found via VND pattern:", maxMatch);
-                            return maxMatch;
-                        }
-                    }
-                    
-                    // Strategy 4: Element-based search (skip small text like "Preview")
-                    const elements = document.querySelectorAll('[class*="balance"], [class*="spending"], [class*="amount"], [class*="money"], [class*="price"]');
-                    for (let el of elements) {
-                        const text = el.innerText.trim();
-                        // Must have digits, be reasonably sized, and not be "Preview" or similar
-                        if (text && /\\d{2,}/.test(text) && text.length > 5 && text.length < 200) {
-                            if (!text.toLowerCase().includes('preview')) {
-                                console.log("Found via element:", text);
-                                return text;
-                            }
-                        }
-                    }
-                    
-                    // Fallback: return body text for parsing
-                    console.log("Fallback: returning body text");
-                    return bodyText.substring(0, 8000);
-                }
-            ''')
+            # v5.7.6: Simplified - just get body text and parse in Python
+            print("🔍 Extracting page content...")
+            spending_text = await page.evaluate('() => document.body.innerText')
             
-            print(f"✅ Got spending text: {spending_text[:100]}...")
+            # Log page title and content length for debugging
+            page_title = await page.title()
+            print(f"📄 Page title: {page_title}")
+            print(f"📏 Content length: {len(spending_text)} chars")
             
-            # Parse spending from text - v5.7.5 improved parsing
+            # Log first 500 chars to see what we got
+            print(f"📝 Content preview: {spending_text[:500]}")
+            
+            # Parse spending from text - v5.7.6 multi-strategy parsing
             spending = 0
             
-            # First try to find VND-specific pattern
-            vnd_match = re.search(r'(\d{1,3}(?:,\d{3})+|\d+)\s*VND', spending_text)
-            if vnd_match:
-                num_str = vnd_match.group(1).replace(',', '')
+            # Strategy 1: Look for "Spending so far" pattern
+            spending_match = re.search(r'Spending so far[^\d]*(\d[\d,\.]+)', spending_text, re.IGNORECASE)
+            if spending_match:
+                num_str = spending_match.group(1).replace(',', '').replace('.', '')
                 try:
                     spending = float(num_str)
-                    print(f"✅ Found VND amount: {spending:,.0f}")
+                    print(f"✅ Strategy 1 - Found 'Spending so far': {spending:,.0f}")
                 except:
                     pass
             
-            # Fallback: find numbers in reasonable range
+            # Strategy 2: Look for "billing cycle" + number + VND
             if spending == 0:
-                numbers = re.findall(r'[\d,]+(?:\.\d+)?', spending_text)
-                for num in numbers:
+                billing_match = re.search(r'billing cycle[^\d]*(\d[\d,\.]+)\s*VND', spending_text, re.IGNORECASE)
+                if billing_match:
+                    num_str = billing_match.group(1).replace(',', '').replace('.', '')
                     try:
-                        val = float(num.replace(',', ''))
+                        spending = float(num_str)
+                        print(f"✅ Strategy 2 - Found 'billing cycle': {spending:,.0f}")
+                    except:
+                        pass
+            
+            # Strategy 3: Find all VND amounts and pick the largest > 1M
+            if spending == 0:
+                vnd_matches = re.findall(r'(\d{1,3}(?:,\d{3})+|\d+)\s*VND', spending_text)
+                print(f"🔍 Found {len(vnd_matches)} VND amounts: {vnd_matches[:5]}")
+                for num_str in vnd_matches:
+                    try:
+                        val = float(num_str.replace(',', ''))
+                        if val > spending and 1000000 < val < 500000000:
+                            spending = val
+                    except:
+                        pass
+                if spending > 0:
+                    print(f"✅ Strategy 3 - Largest VND amount: {spending:,.0f}")
+            
+            # Strategy 4: Find any large number in reasonable range
+            if spending == 0:
+                numbers = re.findall(r'(\d{1,3}(?:,\d{3})+)', spending_text)
+                for num_str in numbers:
+                    try:
+                        val = float(num_str.replace(',', ''))
                         if 1000000 < val < 500000000:
                             spending = val
-                            print(f"✅ Found spending via fallback: {spending:,.0f}")
+                            print(f"✅ Strategy 4 - Large number: {spending:,.0f}")
                             break
                     except:
                         pass
             
             if spending == 0:
-                print(f"⚠️ Could not parse spending from: {spending_text[:200]}")
+                print(f"⚠️ Could not parse spending. Content sample: {spending_text[:300]}")
             
             # Save screenshot for debug
             try:
