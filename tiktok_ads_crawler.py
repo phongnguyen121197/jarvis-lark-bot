@@ -1,11 +1,10 @@
 """
-TikTok Ads Web Crawler - Version 5.7.4
-Fixed: Navigation timeout, better error handling, more logging
+TikTok Ads Web Crawler - Version 5.7.5
+Fixed: Improved selector to find correct spending amount (not "Preview")
 """
 import os
 import re
 import json
-import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -14,11 +13,6 @@ PRIMARY_ADVERTISER_ID = os.getenv("TIKTOK_PRIMARY_ADVERTISER_ID", "7089362853240
 CREDIT_LIMIT = float(os.getenv("TIKTOK_CREDIT_LIMIT", "163646248"))
 WARNING_THRESHOLD = float(os.getenv("TIKTOK_WARNING_THRESHOLD", "85"))
 COOKIES_FILE = "/tmp/tiktok_ads_cookies.json"
-
-# Timeouts (in milliseconds)
-NAVIGATION_TIMEOUT = 15000  # 15 seconds for navigation
-PAGE_TIMEOUT = 5000  # 5 seconds for page operations
-TOTAL_TIMEOUT = 30  # 30 seconds total for crawl
 
 # Cache
 _cached_data: Dict[str, Any] = {
@@ -126,7 +120,6 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
     """
     Crawl TikTok Ads Manager để lấy thông tin dư nợ
     Sử dụng Playwright để render JavaScript
-    Version 5.7.4: Fixed timeout issues
     """
     cookies = load_cookies()
     
@@ -138,7 +131,7 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
         }
     
     try:
-        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+        from playwright.async_api import async_playwright
     except ImportError:
         return {
             "success": False,
@@ -146,131 +139,140 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
         }
     
     url = f"https://ads.tiktok.com/i18n/account/payment?aadvid={PRIMARY_ADVERTISER_ID}"
-    browser = None
     
     try:
-        print(f"🚀 Starting crawler...")
-        
         async with async_playwright() as p:
-            print(f"📦 Launching browser...")
             browser = await p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                args=['--no-sandbox', '--disable-setuid-sandbox']
             )
             
-            print(f"🌐 Creating context...")
             context = await browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             )
             
-            # Set default timeout for context
-            context.set_default_timeout(PAGE_TIMEOUT)
-            
             # Add cookies
-            print(f"🍪 Adding {len(cookies)} cookies...")
             await context.add_cookies(cookies)
             
             page = await context.new_page()
             
-            # Navigate with short timeout and domcontentloaded (faster than networkidle)
             print(f"🌐 Navigating to {url}")
-            try:
-                await page.goto(url, wait_until='domcontentloaded', timeout=NAVIGATION_TIMEOUT)
-                print(f"✅ Navigation complete")
-            except PlaywrightTimeout:
-                print(f"⚠️ Navigation timeout after {NAVIGATION_TIMEOUT}ms, continuing anyway...")
-            except Exception as nav_err:
-                print(f"⚠️ Navigation error: {nav_err}, continuing...")
+            await page.goto(url, wait_until='networkidle', timeout=30000)
             
-            # Wait a bit for JS to render
-            print(f"⏳ Waiting for JS to render...")
-            await asyncio.sleep(2)
+            # Wait for page to load
+            await page.wait_for_timeout(3000)
             
             # Check if login required
-            print(f"🔍 Checking page content...")
-            try:
-                content = await asyncio.wait_for(
-                    page.content(),
-                    timeout=5
-                )
-                if 'login' in content.lower() and 'sign in' in content.lower():
-                    await browser.close()
-                    return {
-                        "success": False,
-                        "error": "Cookies expired - need to re-login and update cookies"
+            content = await page.content()
+            if 'login' in content.lower() and 'sign in' in content.lower():
+                await browser.close()
+                return {
+                    "success": False,
+                    "error": "Cookies expired - need to re-login and update cookies"
+                }
+            
+            # Try to find spending info - v5.7.5 improved selector
+            spending_text = await page.evaluate('''
+                () => {
+                    const bodyText = document.body.innerText;
+                    
+                    // Strategy 1: Look for "Spending so far" pattern (exact match from screenshot)
+                    const spendingMatch = bodyText.match(/Spending so far[^\\d]*(\\d[\\d,\\.]+)/i);
+                    if (spendingMatch) {
+                        console.log("Found via 'Spending so far':", spendingMatch[0]);
+                        return spendingMatch[0];
                     }
-                print(f"✅ Page content retrieved ({len(content)} chars)")
-            except asyncio.TimeoutError:
-                print(f"⚠️ Content timeout, continuing...")
-                content = ""
-            except Exception as e:
-                print(f"⚠️ Content error: {e}")
-                content = ""
-            
-            # Try to find spending info
-            print(f"💰 Extracting spending data...")
-            spending_text = ""
-            try:
-                spending_text = await asyncio.wait_for(
-                    page.evaluate('''
-                        () => {
-                            // Find elements with spending info
-                            const elements = document.querySelectorAll('[class*="balance"], [class*="spending"], [class*="amount"], [class*="money"]');
-                            let texts = [];
-                            for (let el of elements) {
-                                const text = el.innerText;
-                                if (text && /[\d,]+/.test(text)) {
-                                    texts.push(text);
-                                }
+                    
+                    // Strategy 2: Look for "billing cycle" pattern
+                    const billingMatch = bodyText.match(/billing cycle[^\\d]*(\\d[\\d,\\.]+)/i);
+                    if (billingMatch) {
+                        console.log("Found via 'billing cycle':", billingMatch[0]);
+                        return billingMatch[0];
+                    }
+                    
+                    // Strategy 3: Look for large VND amounts (spending is usually millions)
+                    const vndMatches = bodyText.match(/(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?)\\s*VND/g);
+                    if (vndMatches && vndMatches.length > 0) {
+                        // Return the largest VND amount (most likely spending)
+                        let maxAmount = 0;
+                        let maxMatch = "";
+                        for (const m of vndMatches) {
+                            const numStr = m.replace(/[^\\d]/g, '');
+                            const val = parseInt(numStr);
+                            if (val > maxAmount && val > 1000000) {
+                                maxAmount = val;
+                                maxMatch = m;
                             }
-                            if (texts.length > 0) {
-                                return texts.join(' | ');
-                            }
-                            // Fallback: get relevant text
-                            return document.body.innerText.substring(0, 3000);
                         }
-                    '''),
-                    timeout=5
-                )
-                print(f"✅ Got spending text: {spending_text[:200]}...")
-            except asyncio.TimeoutError:
-                print(f"⚠️ Evaluate timeout")
-            except Exception as e:
-                print(f"⚠️ Evaluate error: {e}")
+                        if (maxMatch) {
+                            console.log("Found via VND pattern:", maxMatch);
+                            return maxMatch;
+                        }
+                    }
+                    
+                    // Strategy 4: Element-based search (skip small text like "Preview")
+                    const elements = document.querySelectorAll('[class*="balance"], [class*="spending"], [class*="amount"], [class*="money"], [class*="price"]');
+                    for (let el of elements) {
+                        const text = el.innerText.trim();
+                        // Must have digits, be reasonably sized, and not be "Preview" or similar
+                        if (text && /\\d{2,}/.test(text) && text.length > 5 && text.length < 200) {
+                            if (!text.toLowerCase().includes('preview')) {
+                                console.log("Found via element:", text);
+                                return text;
+                            }
+                        }
+                    }
+                    
+                    // Fallback: return body text for parsing
+                    console.log("Fallback: returning body text");
+                    return bodyText.substring(0, 8000);
+                }
+            ''')
             
-            # Parse spending from text
+            print(f"✅ Got spending text: {spending_text[:100]}...")
+            
+            # Parse spending from text - v5.7.5 improved parsing
             spending = 0
             
-            # Try to find numbers that look like spending
-            if spending_text:
-                clean_text = spending_text.replace(',', '').replace('.', '')
-                numbers = re.findall(r'\d+', clean_text)
+            # First try to find VND-specific pattern
+            vnd_match = re.search(r'(\d{1,3}(?:,\d{3})+|\d+)\s*VND', spending_text)
+            if vnd_match:
+                num_str = vnd_match.group(1).replace(',', '')
+                try:
+                    spending = float(num_str)
+                    print(f"✅ Found VND amount: {spending:,.0f}")
+                except:
+                    pass
+            
+            # Fallback: find numbers in reasonable range
+            if spending == 0:
+                numbers = re.findall(r'[\d,]+(?:\.\d+)?', spending_text)
                 for num in numbers:
                     try:
-                        val = float(num)
-                        if 1000000 < val < 500000000:  # Reasonable range for VND
+                        val = float(num.replace(',', ''))
+                        if 1000000 < val < 500000000:
                             spending = val
-                            print(f"💵 Found spending: {spending:,.0f}")
+                            print(f"✅ Found spending via fallback: {spending:,.0f}")
                             break
                     except:
                         pass
             
+            if spending == 0:
+                print(f"⚠️ Could not parse spending from: {spending_text[:200]}")
+            
             # Save screenshot for debug
             try:
-                await page.screenshot(path='/tmp/tiktok_ads_page.png', timeout=3000)
-                print("📸 Screenshot saved to /tmp/tiktok_ads_page.png")
+                await page.screenshot(path='/tmp/tiktok_ads_page.png')
+                print("📸 Screenshot saved")
             except:
-                print("⚠️ Screenshot failed")
+                pass
             
             await browser.close()
-            print(f"✅ Browser closed")
             
             # Update cache
             _cached_data["spending"] = spending
             _cached_data["updated_at"] = datetime.now().isoformat()
-            
-            print(f"✅ Crawl complete. Spending: {spending:,.0f}")
             
             return {
                 "success": True,
@@ -284,14 +286,6 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
         print(f"❌ Crawler error: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Ensure browser is closed
-        if browser:
-            try:
-                await browser.close()
-            except:
-                pass
-        
         return {
             "success": False,
             "error": f"Crawler error: {str(e)}"
@@ -299,7 +293,7 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
 
 
 async def get_spending_data(force_refresh: bool = False) -> Dict[str, Any]:
-    """Get TikTok Ads spending data with timeout protection"""
+    """Get TikTok Ads spending data"""
     
     # Return cache if valid
     if not force_refresh and is_cache_valid():
@@ -322,19 +316,9 @@ async def get_spending_data(force_refresh: bool = False) -> Dict[str, Any]:
             "help": "Set TIKTOK_COOKIES_JSON env variable"
         }
     
-    # Try to crawl with total timeout
-    try:
-        result = await asyncio.wait_for(
-            crawl_tiktok_ads(),
-            timeout=TOTAL_TIMEOUT
-        )
-        return result
-    except asyncio.TimeoutError:
-        print(f"❌ Total timeout after {TOTAL_TIMEOUT}s")
-        return {
-            "success": False,
-            "error": f"Crawl timeout after {TOTAL_TIMEOUT}s"
-        }
+    # Try to crawl
+    result = await crawl_tiktok_ads()
+    return result
 
 
 def format_spending_report(data: Dict[str, Any]) -> str:
