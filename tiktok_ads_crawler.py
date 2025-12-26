@@ -158,10 +158,12 @@ async def crawl_tiktok_ads() -> Dict[str, Any]:
             page = await context.new_page()
             
             print(f"🌐 Navigating to {url}")
-            await page.goto(url, wait_until='networkidle', timeout=30000)
+            # v5.7.5: Use domcontentloaded instead of networkidle to avoid timeout
+            await page.goto(url, wait_until='domcontentloaded', timeout=15000)
             
-            # Wait for page to load
-            await page.wait_for_timeout(3000)
+            # Wait for JS to render spending data
+            print("⏳ Waiting for JS to render...")
+            await page.wait_for_timeout(5000)
             
             # Check if login required
             content = await page.content()
