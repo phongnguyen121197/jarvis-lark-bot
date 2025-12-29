@@ -2056,6 +2056,28 @@ async def debug_task_fields():
 
 
 # ============ NOTES FUNCTIONS ============
+async def get_all_notes() -> List[Dict]:
+    """Lấy TẤT CẢ notes (cho scheduler reminder)"""
+    records = await get_all_records(
+        NOTES_TABLE["app_token"],
+        NOTES_TABLE["table_id"]
+    )
+    
+    notes = []
+    for r in records:
+        fields = r.get("fields", {})
+        notes.append({
+            "record_id": r.get("record_id"),
+            "chat_id": fields.get("chat_id"),
+            "note_key": fields.get("note_key"),
+            "note_value": fields.get("note_value"),
+            "deadline": fields.get("deadline"),
+            "created_at": fields.get("created_at"),
+        })
+    
+    return notes
+
+
 async def get_notes_by_chat_id(chat_id: str) -> List[Dict]:
     """Lấy tất cả notes của một chat"""
     records = await get_all_records(

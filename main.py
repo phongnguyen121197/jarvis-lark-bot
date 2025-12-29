@@ -1,7 +1,14 @@
 """
 Jarvis - Lark AI Report Assistant
 Main application with all modules integrated
-Version 5.7.2 - Fixed CHENG KPI routing
+Version 5.7.12 - Fixed NotesManager scheduler integration
+
+Changelog v5.7.12:
+- Fixed AttributeError in check_and_send_reminders scheduler job
+- Added SchedulerNotesManager class for cross-chat note reminders
+- Added get_all_notes() function in lark_base.py
+- Added Note dataclass for scheduler compatibility
+- Fixed async/await calls in reminder scheduler
 """
 import os
 import json
@@ -593,8 +600,8 @@ async def handle_message_event(event: dict):
 async def check_and_send_reminders():
     print(f"🔔 Running reminder check at {datetime.now()}")
     manager = get_notes_manager()
-    due_soon = manager.get_notes_due_soon(days=1)
-    overdue = manager.get_overdue_notes()
+    due_soon = await manager.get_notes_due_soon(days=1)
+    overdue = await manager.get_overdue_notes()
     reminders_sent = 0
     
     for note in due_soon:
@@ -737,7 +744,7 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.7.2"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.7.12"}
 
 @app.get("/health")
 async def health():

@@ -1,7 +1,7 @@
 """
 Notes Manager Module
 Quản lý ghi chú người dùng - lưu trữ trong Lark Bitable
-Version 5.7.2 - Fixed deadline regex + Calendar integration
+Version 5.7.12 - Added SchedulerNotesManager for reminder jobs
 """
 import re
 from typing import Dict, List, Optional, Tuple
@@ -14,8 +14,115 @@ from lark_base import (
     update_note,
     delete_note,
     debug_notes_table,
-    create_calendar_event
+    create_calendar_event,
+    get_all_notes
 )
+from dataclasses import dataclass
+
+
+@dataclass
+class Note:
+    """Note object for scheduler compatibility"""
+    id: str
+    content: str
+    chat_id: str
+    deadline: datetime
+    reminder_sent: bool = False
+
+
+# In-memory tracking of sent reminders (resets on restart)
+_reminder_sent_ids: set = set()
+
+
+class SchedulerNotesManager:
+    """
+    Manager class cho scheduler - fetch ALL notes across all chats
+    Returns Note objects compatible with main.py scheduler
+    """
+    
+    async def get_notes_due_soon(self, days: int = 1) -> List[Note]:
+        """Lấy notes có deadline trong N ngày tới (across all chats)"""
+        all_notes = await get_all_notes()
+        
+        if not all_notes:
+            return []
+        
+        now = datetime.now()
+        cutoff = now + timedelta(days=days)
+        result = []
+        
+        for note in all_notes:
+            deadline = note.get("deadline")
+            if not deadline:
+                continue
+            try:
+                # Handle both timestamp (ms) and ISO format
+                if isinstance(deadline, (int, float)):
+                    dl = datetime.fromtimestamp(deadline / 1000)
+                else:
+                    dl = datetime.fromisoformat(str(deadline).replace('Z', '+00:00'))
+                
+                # Check if within range and not overdue
+                if now <= dl <= cutoff:
+                    record_id = note.get("record_id", "")
+                    result.append(Note(
+                        id=record_id,
+                        content=note.get("note_value", note.get("note_key", "")),
+                        chat_id=note.get("chat_id", ""),
+                        deadline=dl,
+                        reminder_sent=record_id in _reminder_sent_ids
+                    ))
+            except Exception as e:
+                print(f"⚠️ Error parsing deadline: {e}")
+                continue
+        
+        return result
+    
+    async def get_overdue_notes(self) -> List[Note]:
+        """Lấy notes đã quá hạn (across all chats)"""
+        all_notes = await get_all_notes()
+        
+        if not all_notes:
+            return []
+        
+        now = datetime.now()
+        result = []
+        
+        for note in all_notes:
+            deadline = note.get("deadline")
+            if not deadline:
+                continue
+            try:
+                # Handle both timestamp (ms) and ISO format
+                if isinstance(deadline, (int, float)):
+                    dl = datetime.fromtimestamp(deadline / 1000)
+                else:
+                    dl = datetime.fromisoformat(str(deadline).replace('Z', '+00:00'))
+                
+                # Check if overdue
+                if dl < now:
+                    record_id = note.get("record_id", "")
+                    result.append(Note(
+                        id=record_id,
+                        content=note.get("note_value", note.get("note_key", "")),
+                        chat_id=note.get("chat_id", ""),
+                        deadline=dl,
+                        reminder_sent=record_id in _reminder_sent_ids
+                    ))
+            except Exception as e:
+                print(f"⚠️ Error parsing deadline: {e}")
+                continue
+        
+        return result
+    
+    def mark_reminder_sent(self, note_id: str):
+        """Đánh dấu đã gửi reminder cho note (in-memory)"""
+        _reminder_sent_ids.add(note_id)
+        print(f"✅ Marked reminder sent for note: {note_id}")
+
+
+# Global scheduler manager instance
+_scheduler_manager: SchedulerNotesManager = None
 
 
 def parse_deadline(text: str) -> Optional[str]:
@@ -399,11 +506,23 @@ async def debug_notes():
 _managers: Dict[str, NotesManager] = {}
 
 
-def get_notes_manager(chat_id: str = "default") -> NotesManager:
+def get_notes_manager(chat_id: str = "default"):
     """
     Lấy hoặc tạo NotesManager instance cho chat_id
     (Backward compatibility với code cũ)
+    
+    Nếu chat_id = "default" -> trả về SchedulerNotesManager để check tất cả notes
+    Nếu chat_id cụ thể -> trả về NotesManager cho chat đó
     """
+    global _scheduler_manager
+    
+    # Scheduler uses default - returns SchedulerNotesManager for ALL notes
+    if chat_id == "default":
+        if _scheduler_manager is None:
+            _scheduler_manager = SchedulerNotesManager()
+        return _scheduler_manager
+    
+    # Specific chat_id - returns NotesManager for that chat
     if chat_id not in _managers:
         _managers[chat_id] = NotesManager(chat_id)
     return _managers[chat_id]
