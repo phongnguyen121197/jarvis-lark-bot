@@ -721,17 +721,16 @@ async def startup_event():
         id="periodic_reminder",
         replace_existing=True
     )
-    if TIKTOK_ALERT_CHAT_ID:
+ if TIKTOK_ALERT_CHAT_ID:
         # v5.7.6: Use CronTrigger instead of IntervalTrigger
-        # CronTrigger won't reset when container restarts
-        # Run every Monday and Thursday at 9:00 AM (approx every 3 days)
+        # Run everyday at 9:00 AM
         scheduler.add_job(
             check_tiktok_ads_warning,
-            CronTrigger(day_of_week="mon,thu", hour=9, minute=0, timezone=TIMEZONE),
+            CronTrigger(hour=9, minute=0, timezone=TIMEZONE), # <-- Đã xóa day_of_week
             id="tiktok_ads_warning",
             replace_existing=True
         )
-        print(f"📊 TikTok Ads scheduled check: Monday & Thursday at 9:00 AM")
+        print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM")
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
 
