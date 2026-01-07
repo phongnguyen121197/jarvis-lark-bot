@@ -709,28 +709,32 @@ async def check_tiktok_ads_warning():
 
 @app.on_event("startup")
 async def startup_event():
+    # Job 1: Nhắc nhở daily (theo config REMINDER_HOUR)
     scheduler.add_job(
         check_and_send_reminders,
         CronTrigger(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, timezone=TIMEZONE),
         id="daily_reminder",
         replace_existing=True
     )
+    
+    # Job 2: Nhắc nhở định kỳ (0h, 6h, 12h, 18h)
     scheduler.add_job(
         check_and_send_reminders,
         CronTrigger(hour="0,6,12,18", minute=0, timezone=TIMEZONE),
         id="periodic_reminder",
         replace_existing=True
     )
- if TIKTOK_ALERT_CHAT_ID:
-        # v5.7.6: Use CronTrigger instead of IntervalTrigger
-        # Run everyday at 9:00 AM
+    
+    # Job 3: Check TikTok Ads (Chạy 9h sáng mỗi ngày)
+    if TIKTOK_ALERT_CHAT_ID:
         scheduler.add_job(
             check_tiktok_ads_warning,
-            CronTrigger(hour=9, minute=0, timezone=TIMEZONE), # <-- Đã xóa day_of_week
+            CronTrigger(hour=9, minute=0, timezone=TIMEZONE),
             id="tiktok_ads_warning",
             replace_existing=True
         )
         print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM")
+        
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
 
