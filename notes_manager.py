@@ -1,732 +1,550 @@
-"""
-Notes Manager Module
-Quản lý ghi chú người dùng - lưu trữ trong Lark Bitable
-Version 5.7.14 - Fixed Done command to delete notes by title or record_id
-"""
+# notes_manager.py - Version 5.8.0
+# Fixed: "Done" command to mark reminders as complete
+# Added: Multiple patterns for done/complete commands
+
 import re
-from typing import Dict, List, Optional, Tuple
+import logging
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
 
 from lark_base import (
-    get_notes_by_chat_id,
-    get_note_by_key,
+    get_notes_by_chat,
     create_note,
     update_note,
     delete_note,
-    debug_notes_table,
-    create_calendar_event,
-    get_all_notes
+    get_notes_due_soon
 )
-from dataclasses import dataclass
 
+logger = logging.getLogger(__name__)
 
-@dataclass
-class Note:
-    """Note object for scheduler compatibility"""
-    id: str
-    content: str
-    chat_id: str
-    deadline: datetime
-    reminder_sent: bool = False
+# ============================================================================
+# COMMAND PATTERNS
+# ============================================================================
 
+# Add note patterns
+ADD_PATTERNS = [
+    r'(?:ghi chú|ghi chu|note|nhắc|nhac|reminder|remember|nhớ|nho)\s*[:\-]?\s*(.+)',
+    r'(?:thêm|them|add)\s+(?:ghi chú|note|nhắc|reminder)\s*[:\-]?\s*(.+)',
+    r'(?:lưu|luu|save)\s+(?:ghi chú|note)\s*[:\-]?\s*(.+)',
+]
 
-# In-memory tracking of sent reminders (resets on restart)
-_reminder_sent_ids: set = set()
+# View note patterns
+VIEW_PATTERNS = [
+    r'(?:xem|show|list|danh sách|danhsach)\s+(?:ghi chú|note|nhắc|reminder)',
+    r'(?:ghi chú|note|nhắc|reminder)\s+(?:của tôi|cua toi|of mine)',
+    r'(?:các|cac|all)\s+(?:ghi chú|note|nhắc|reminder)',
+]
 
+# Delete note patterns
+DELETE_PATTERNS = [
+    r'(?:xóa|xoa|delete|remove|hủy|huy)\s+(?:ghi chú|note|nhắc|reminder)\s*#?(\d+)',
+    r'(?:xóa|xoa|delete|remove)\s*#(\d+)',
+]
 
-class SchedulerNotesManager:
+# === NEW in v5.8.0: Done/Complete patterns ===
+DONE_PATTERNS = [
+    # "Done #1" or "Done 1"
+    r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s*#?(\d+)',
+    # "#1 done" or "#1 xong"
+    r'#(\d+)\s*(?:done|xong|hoàn thành|hoan thanh|complete|completed)',
+    # "Done [title]" - match by title
+    r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s+(.+)',
+    # "Đã xong [title]"
+    r'(?:đã xong|da xong|đã hoàn thành|da hoan thanh)\s+(.+)',
+]
+
+# Update note patterns
+UPDATE_PATTERNS = [
+    r'(?:sửa|sua|edit|update|cập nhật|cap nhat)\s+(?:ghi chú|note|nhắc|reminder)\s*#?(\d+)\s*[:\-]?\s*(.+)',
+    r'(?:sửa|sua|edit|update)\s*#(\d+)\s*[:\-]?\s*(.+)',
+]
+
+# Set deadline patterns
+DEADLINE_PATTERNS = [
+    r'(?:hạn|han|deadline|đến hạn|den han|nhắc lúc|nhac luc|nhắc vào|nhac vao)\s*[:\-]?\s*(.+)',
+    r'(?:vào|vao|lúc|luc|at)\s+(\d{1,2}[:\-h]\d{2})',
+    r'(\d{1,2}/\d{1,2}(?:/\d{2,4})?)',
+    r'(ngày mai|hôm nay|tuần sau|tháng sau)',
+]
+
+# ============================================================================
+# PARSING UTILITIES
+# ============================================================================
+
+def parse_datetime(text: str) -> Optional[datetime]:
     """
-    Manager class cho scheduler - fetch ALL notes across all chats
-    Returns Note objects compatible with main.py scheduler
-    """
+    Parse datetime from Vietnamese/English text
     
-    async def get_notes_due_soon(self, days: int = 1) -> List[Note]:
-        """Lấy notes có deadline trong N ngày tới (across all chats)"""
-        all_notes = await get_all_notes()
-        
-        if not all_notes:
-            return []
-        
-        now = datetime.now()
-        cutoff = now + timedelta(days=days)
-        result = []
-        
-        for note in all_notes:
-            deadline = note.get("deadline")
-            if not deadline:
-                continue
-            try:
-                # Handle both timestamp (ms) and ISO format
-                if isinstance(deadline, (int, float)):
-                    dl = datetime.fromtimestamp(deadline / 1000)
-                else:
-                    dl = datetime.fromisoformat(str(deadline).replace('Z', '+00:00'))
-                
-                # Check if within range and not overdue
-                if now <= dl <= cutoff:
-                    record_id = note.get("record_id", "")
-                    result.append(Note(
-                        id=record_id,
-                        content=note.get("note_value", note.get("note_key", "")),
-                        chat_id=note.get("chat_id", ""),
-                        deadline=dl,
-                        reminder_sent=record_id in _reminder_sent_ids
-                    ))
-            except Exception as e:
-                print(f"⚠️ Error parsing deadline: {e}")
-                continue
-        
-        return result
-    
-    async def get_overdue_notes(self) -> List[Note]:
-        """Lấy notes đã quá hạn (across all chats)"""
-        all_notes = await get_all_notes()
-        
-        if not all_notes:
-            return []
-        
-        now = datetime.now()
-        result = []
-        
-        for note in all_notes:
-            deadline = note.get("deadline")
-            if not deadline:
-                continue
-            try:
-                # Handle both timestamp (ms) and ISO format
-                if isinstance(deadline, (int, float)):
-                    dl = datetime.fromtimestamp(deadline / 1000)
-                else:
-                    dl = datetime.fromisoformat(str(deadline).replace('Z', '+00:00'))
-                
-                # Check if overdue
-                if dl < now:
-                    record_id = note.get("record_id", "")
-                    result.append(Note(
-                        id=record_id,
-                        content=note.get("note_value", note.get("note_key", "")),
-                        chat_id=note.get("chat_id", ""),
-                        deadline=dl,
-                        reminder_sent=record_id in _reminder_sent_ids
-                    ))
-            except Exception as e:
-                print(f"⚠️ Error parsing deadline: {e}")
-                continue
-        
-        return result
-    
-    def mark_reminder_sent(self, note_id: str):
-        """Đánh dấu đã gửi reminder cho note (in-memory)"""
-        _reminder_sent_ids.add(note_id)
-        print(f"✅ Marked reminder sent for note: {note_id}")
-
-
-# Global scheduler manager instance
-_scheduler_manager: SchedulerNotesManager = None
-
-
-def parse_deadline(text: str) -> Optional[str]:
+    Supports:
+    - "hôm nay", "ngày mai", "tuần sau"
+    - "15:30", "15h30", "3pm"
+    - "25/12", "25/12/2024"
+    - "25/12 15:30"
     """
-    Parse deadline từ text người dùng
-    Returns ISO format datetime string
-    """
+    text = text.lower().strip()
     now = datetime.now()
-    text_lower = text.lower().strip()
     
-    if "hôm nay" in text_lower:
-        return now.replace(hour=23, minute=59).isoformat()
+    # Relative dates
+    if "hôm nay" in text or "hom nay" in text or "today" in text:
+        base_date = now
+    elif "ngày mai" in text or "ngay mai" in text or "tomorrow" in text:
+        base_date = now + timedelta(days=1)
+    elif "tuần sau" in text or "tuan sau" in text or "next week" in text:
+        base_date = now + timedelta(weeks=1)
+    elif "tháng sau" in text or "thang sau" in text or "next month" in text:
+        base_date = now + timedelta(days=30)
+    else:
+        base_date = now
     
-    if "ngày mai" in text_lower:
-        return (now + timedelta(days=1)).replace(hour=23, minute=59).isoformat()
-    
-    if "ngày kia" in text_lower or "ngày mốt" in text_lower:
-        return (now + timedelta(days=2)).replace(hour=23, minute=59).isoformat()
-    
-    # Thứ trong tuần
-    days_map = {
-        "thứ 2": 0, "thứ hai": 0,
-        "thứ 3": 1, "thứ ba": 1,
-        "thứ 4": 2, "thứ tư": 2,
-        "thứ 5": 3, "thứ năm": 3,
-        "thứ 6": 4, "thứ sáu": 4,
-        "thứ 7": 5, "thứ bảy": 5,
-        "chủ nhật": 6, "cn": 6,
-    }
-    
-    for day_name, target_weekday in days_map.items():
-        if day_name in text_lower:
-            current_weekday = now.weekday()
-            days_ahead = target_weekday - current_weekday
-            if days_ahead <= 0:
-                days_ahead += 7
-            target_date = now + timedelta(days=days_ahead)
-            return target_date.replace(hour=23, minute=59).isoformat()
-    
-    # DD/MM format
-    match = re.search(r'(\d{1,2})/(\d{1,2})(?:/(\d{4}))?', text)
-    if match:
-        day = int(match.group(1))
-        month = int(match.group(2))
-        year = int(match.group(3)) if match.group(3) else now.year
+    # Try to extract date
+    date_match = re.search(r'(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?', text)
+    if date_match:
+        day = int(date_match.group(1))
+        month = int(date_match.group(2))
+        year = int(date_match.group(3)) if date_match.group(3) else now.year
+        
+        if year < 100:
+            year += 2000
+        
         try:
-            target_date = datetime(year, month, day, 23, 59)
-            if target_date < now and not match.group(3):
-                target_date = datetime(year + 1, month, day, 23, 59)
-            return target_date.isoformat()
+            base_date = base_date.replace(year=year, month=month, day=day)
         except ValueError:
             pass
     
+    # Try to extract time
+    time_match = re.search(r'(\d{1,2})[:\-h](\d{2})', text)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        
+        try:
+            base_date = base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            pass
+    else:
+        # Default to 9:00 AM if no time specified
+        base_date = base_date.replace(hour=9, minute=0, second=0, microsecond=0)
+    
+    return base_date
+
+
+def extract_deadline_from_text(text: str) -> Tuple[str, Optional[datetime]]:
+    """
+    Extract deadline from note text
+    
+    Returns: (cleaned_text, deadline)
+    
+    Examples:
+    - "Họp team deadline 15/12" -> ("Họp team", datetime(2024, 12, 15, 9, 0))
+    - "Gọi khách hạn 10h30 ngày mai" -> ("Gọi khách", tomorrow at 10:30)
+    """
+    deadline = None
+    cleaned_text = text
+    
+    # Check for deadline keywords
+    for pattern in DEADLINE_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            deadline_str = match.group(1) if match.groups() else match.group(0)
+            deadline = parse_datetime(deadline_str)
+            
+            # Remove deadline part from text
+            cleaned_text = re.sub(pattern, '', text, flags=re.IGNORECASE).strip()
+            cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+            break
+    
+    return cleaned_text, deadline
+
+# ============================================================================
+# NOTE COMMANDS
+# ============================================================================
+
+def check_note_command(message: str, chat_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Check if message is a note command and return action
+    
+    Returns:
+    {
+        "action": "add|view|delete|update|done",
+        "note_key": str,
+        "note_value": str,
+        "deadline": datetime,
+        "note_id": str,
+        ...
+    }
+    """
+    message = message.strip()
+    
+    # === Check DONE patterns first (NEW in v5.8.0) ===
+    for pattern in DONE_PATTERNS:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            identifier = match.group(1).strip()
+            
+            # Check if it's a number (ID) or text (title)
+            if identifier.isdigit():
+                return {
+                    "action": "done",
+                    "identifier_type": "id",
+                    "note_id": identifier,
+                    "chat_id": chat_id
+                }
+            else:
+                return {
+                    "action": "done",
+                    "identifier_type": "title",
+                    "note_title": identifier,
+                    "chat_id": chat_id
+                }
+    
+    # Check ADD patterns
+    for pattern in ADD_PATTERNS:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            note_content = match.group(1).strip()
+            note_key, deadline = extract_deadline_from_text(note_content)
+            
+            return {
+                "action": "add",
+                "note_key": note_key[:100],  # Limit title length
+                "note_value": note_content,
+                "deadline": deadline,
+                "chat_id": chat_id
+            }
+    
+    # Check VIEW patterns
+    for pattern in VIEW_PATTERNS:
+        if re.search(pattern, message, re.IGNORECASE):
+            return {
+                "action": "view",
+                "chat_id": chat_id
+            }
+    
+    # Check DELETE patterns
+    for pattern in DELETE_PATTERNS:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            note_id = match.group(1)
+            return {
+                "action": "delete",
+                "note_id": note_id,
+                "chat_id": chat_id
+            }
+    
+    # Check UPDATE patterns
+    for pattern in UPDATE_PATTERNS:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            note_id = match.group(1)
+            new_content = match.group(2).strip()
+            note_key, deadline = extract_deadline_from_text(new_content)
+            
+            return {
+                "action": "update",
+                "note_id": note_id,
+                "note_key": note_key[:100],
+                "note_value": new_content,
+                "deadline": deadline,
+                "chat_id": chat_id
+            }
+    
     return None
 
 
-def extract_note_key(text: str) -> str:
-    """Tạo key ngắn gọn từ nội dung ghi chú"""
-    text = re.sub(r'^(nhớ|ghi nhớ|lưu|note|ghi chú|reminder)\s*(rằng|là|:)?\s*', '', text.lower())
-    words = text.split()[:5]
-    key = ' '.join(words)
-    if len(key) > 40:
-        key = key[:40]
-    return key.strip()
+# ============================================================================
+# NOTE OPERATIONS
+# ============================================================================
 
-
-class NotesManager:
-    """Manager class để xử lý các thao tác với Notes"""
+def handle_add_note(chat_id: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
+    """Add a new note"""
+    record_id = create_note(chat_id, note_key, note_value, deadline)
     
-    def __init__(self, chat_id: str):
-        self.chat_id = chat_id
-    
-    async def list_notes(self) -> Tuple[str, List[Dict]]:
-        """Liệt kê tất cả notes của chat"""
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return "📝 Bạn chưa có ghi chú nào.", []
-        
-        lines = ["📝 **Danh sách ghi chú của bạn:**\n"]
-        
-        for i, note in enumerate(notes, 1):
-            key = note.get("note_key", "")
-            value = note.get("note_value", "")
-            deadline = note.get("deadline")
-            record_id = note.get("record_id", "")
-            
-            # Show record_id để user có thể dùng Done #record_id
-            line = f"{i}. **{key}**"
-            if deadline:
-                try:
-                    if isinstance(deadline, (int, float)):
-                        dl = datetime.fromtimestamp(deadline / 1000)
-                    else:
-                        dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
-                    line += f" (⏰ {dl.strftime('%d/%m')})"
-                except:
-                    pass
-            
-            line += f"\n   {value[:100]}{'...' if len(value) > 100 else ''}"
-            line += f"\n   🆔 `{record_id[:15]}...`"
-            lines.append(line)
-        
-        lines.append("\n💡 Hoàn thành: `Done \"tiêu đề\"` hoặc `Finished # record_id`")
-        return "\n".join(lines), notes
-    
-    async def add_note(self, content: str, deadline_text: str = None) -> str:
-        """Thêm ghi chú mới"""
-        note_key = extract_note_key(content)
-        
-        existing = await get_note_by_key(self.chat_id, note_key)
-        if existing:
-            deadline = parse_deadline(deadline_text) if deadline_text else None
-            await update_note(existing["record_id"], content, deadline)
-            return f"✏️ Đã cập nhật ghi chú: **{note_key}**"
-        
-        deadline = parse_deadline(deadline_text) if deadline_text else None
-        result = await create_note(self.chat_id, note_key, content, deadline)
-        
-        if "error" in result:
-            return f"❌ Lỗi khi lưu ghi chú: {result.get('error')}"
-        
-        response = f"✅ Đã lưu ghi chú: **{note_key}**"
-        
+    if record_id:
+        response = f"✅ Đã thêm ghi chú: **{note_key}**"
         if deadline:
-            try:
-                dl = datetime.fromisoformat(deadline)
-                response += f"\n⏰ Deadline: {dl.strftime('%d/%m/%Y')}"
-            except Exception as e:
-                print(f"⚠️ Deadline parse error: {e}")
-        
+            response += f"\n📅 Hạn nhắc: {deadline.strftime('%d/%m/%Y %H:%M')}"
         return response
-    
-    async def find_note(self, query: str) -> str:
-        """Tìm ghi chú theo keyword"""
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return "📝 Bạn chưa có ghi chú nào."
-        
-        query_lower = query.lower()
-        matches = []
-        
-        for note in notes:
-            key = note.get("note_key", "").lower()
-            value = note.get("note_value", "").lower()
-            
-            if query_lower in key or query_lower in value:
-                matches.append(note)
-        
-        if not matches:
-            return f"🔍 Không tìm thấy ghi chú nào chứa '{query}'"
-        
-        lines = [f"🔍 **Tìm thấy {len(matches)} ghi chú:**\n"]
-        
-        for i, note in enumerate(matches, 1):
-            key = note.get("note_key", "")
-            value = note.get("note_value", "")
-            lines.append(f"{i}. **{key}**\n   {value[:150]}{'...' if len(value) > 150 else ''}")
-        
-        return "\n".join(lines)
-    
-    async def mark_done_by_title(self, title: str) -> str:
-        """
-        Đánh dấu hoàn thành (XÓA) note theo tiêu đề
-        NEW in v5.7.14: Support Done "tiêu đề"
-        """
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return "📝 Bạn chưa có ghi chú nào."
-        
-        title_lower = title.lower().strip()
-        
-        # Tìm note match với title
-        for note in notes:
-            key = note.get("note_key", "").lower()
-            value = note.get("note_value", "").lower()
-            
-            # Match nếu title chứa trong key hoặc value
-            if title_lower in key or title_lower in value or key in title_lower:
-                record_id = note.get("record_id")
-                note_key = note.get("note_key", "")
-                
-                # XÓA note để dừng nhắc
-                result = await delete_note(record_id)
-                
-                if result.get("deleted") or result.get("record_id"):
-                    # Clear from reminder sent tracking
-                    if record_id in _reminder_sent_ids:
-                        _reminder_sent_ids.discard(record_id)
-                    
-                    return f"✅ Đã hoàn thành và xóa ghi chú:\n📝 **{note_key}**\n\n🎉 Tốt lắm! Tiếp tục phát huy nhé!"
-                else:
-                    return f"❌ Lỗi khi xóa ghi chú: {result.get('error', 'Unknown')}"
-        
-        return f"❌ Không tìm thấy ghi chú với tiêu đề: \"{title}\"\n💡 Hãy kiểm tra lại tiêu đề hoặc dùng `xem note` để xem danh sách"
-    
-    async def mark_done_by_record_id(self, record_id: str) -> str:
-        """
-        Đánh dấu hoàn thành (XÓA) note theo record_id
-        NEW in v5.7.14: Support Done # record_id
-        """
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return "📝 Bạn chưa có ghi chú nào."
-        
-        # Tìm note với record_id
-        for note in notes:
-            note_record_id = note.get("record_id", "")
-            
-            # Match nếu record_id khớp (có thể partial match)
-            if record_id in note_record_id or note_record_id.startswith(record_id):
-                note_key = note.get("note_key", "")
-                
-                # XÓA note để dừng nhắc
-                result = await delete_note(note_record_id)
-                
-                if result.get("deleted") or result.get("record_id"):
-                    # Clear from reminder sent tracking
-                    if note_record_id in _reminder_sent_ids:
-                        _reminder_sent_ids.discard(note_record_id)
-                    
-                    return f"✅ Đã hoàn thành và xóa ghi chú:\n📝 **{note_key}**\n🆔 {note_record_id}\n\n🎉 Tốt lắm!"
-                else:
-                    return f"❌ Lỗi khi xóa ghi chú: {result.get('error', 'Unknown')}"
-        
-        return f"❌ Không tìm thấy ghi chú với ID: {record_id}\n💡 Dùng `xem note` để xem danh sách và ID"
-    
-    async def delete_note_by_query(self, query: str) -> str:
-        """Xóa ghi chú theo keyword"""
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return "📝 Bạn chưa có ghi chú nào."
-        
-        query_lower = query.lower()
-        
-        for note in notes:
-            key = note.get("note_key", "").lower()
-            value = note.get("note_value", "").lower()
-            
-            if query_lower in key or query_lower == key:
-                await delete_note(note["record_id"])
-                return f"🗑️ Đã xóa ghi chú: **{note.get('note_key')}**"
-        
-        return f"❌ Không tìm thấy ghi chú '{query}' để xóa"
-    
-    async def get_upcoming_deadlines(self, days: int = 7) -> str:
-        """Lấy các ghi chú có deadline trong N ngày tới"""
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return "📝 Bạn chưa có ghi chú nào."
-        
-        now = datetime.now()
-        cutoff = now + timedelta(days=days)
-        
-        upcoming = []
-        for note in notes:
-            deadline = note.get("deadline")
-            if not deadline:
-                continue
-            try:
-                if isinstance(deadline, (int, float)):
-                    dl = datetime.fromtimestamp(deadline / 1000)
-                else:
-                    dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
-                if now <= dl <= cutoff:
-                    upcoming.append((dl, note))
-            except:
-                pass
-        
-        if not upcoming:
-            return f"📅 Không có ghi chú nào có deadline trong {days} ngày tới."
-        
-        upcoming.sort(key=lambda x: x[0])
-        
-        lines = [f"📅 **Ghi chú có deadline trong {days} ngày tới:**\n"]
-        
-        for dl, note in upcoming:
-            key = note.get("note_key", "")
-            value = note.get("note_value", "")
-            
-            days_left = (dl - now).days
-            if days_left == 0:
-                time_str = "⚠️ Hôm nay"
-            elif days_left == 1:
-                time_str = "⏰ Ngày mai"
-            else:
-                time_str = f"📆 {dl.strftime('%d/%m')} ({days_left} ngày)"
-            
-            lines.append(f"• {time_str}: **{key}**\n  {value[:80]}{'...' if len(value) > 80 else ''}")
-        
-        return "\n".join(lines)
-
-    async def get_notes_due_soon(self, days: int = 1) -> list:
-        """Lấy danh sách notes có deadline sắp đến"""
-        notes = await get_notes_by_chat_id(self.chat_id)
-        
-        if not notes:
-            return []
-        
-        now = datetime.now()
-        cutoff = now + timedelta(days=days)
-        
-        upcoming = []
-        for note in notes:
-            deadline = note.get("deadline")
-            if not deadline:
-                continue
-            try:
-                if isinstance(deadline, (int, float)):
-                    dl = datetime.fromtimestamp(deadline / 1000)
-                else:
-                    dl = datetime.fromisoformat(deadline.replace('Z', '+00:00'))
-                if now <= dl <= cutoff:
-                    upcoming.append({
-                        "note_key": note.get("note_key", ""),
-                        "note_value": note.get("note_value", ""),
-                        "deadline": dl,
-                        "record_id": note.get("record_id", "")
-                    })
-            except:
-                pass
-        
-        return upcoming
+    else:
+        return "❌ Không thể thêm ghi chú. Vui lòng thử lại."
 
 
-async def handle_notes_intent(chat_id: str, intent: str, message: str) -> str:
-    """Xử lý intent liên quan đến Notes"""
-    manager = NotesManager(chat_id)
+def handle_view_notes(chat_id: str) -> str:
+    """View all notes for a chat"""
+    notes = get_notes_by_chat(chat_id)
     
-    if intent == "notes_list":
-        result, _ = await manager.list_notes()
-        return result
+    if not notes:
+        return "📝 Bạn chưa có ghi chú nào."
     
-    elif intent == "notes_add":
-        deadline_text = None
-        deadline_patterns = [
-            r'deadline\s*[:\-]?\s*(.+)$',
-            r'trước\s+(.+)$',
-            r'hạn\s+(.+)$',
-        ]
-        
-        for pattern in deadline_patterns:
-            match = re.search(pattern, message.lower())
-            if match:
-                deadline_text = match.group(1).strip()
-                break
-        
-        content = re.sub(r'(nhớ|ghi nhớ|lưu|note|ghi chú)\s*(rằng|là|:)?\s*', '', message, flags=re.IGNORECASE)
-        content = re.sub(r'deadline\s*[:\-]?\s*.+$', '', content, flags=re.IGNORECASE)
-        content = re.sub(r'trước\s+.+$', '', content, flags=re.IGNORECASE)
-        content = re.sub(r'hạn\s+.+$', '', content, flags=re.IGNORECASE)
-        content = content.strip()
-        
-        if not content:
-            return "❓ Bạn muốn ghi chú gì?"
-        
-        return await manager.add_note(content, deadline_text)
+    lines = ["📝 **GHI CHÚ CỦA BẠN:**", ""]
     
-    elif intent == "notes_find":
-        query = re.sub(r'(tìm|search|kiếm|tìm kiếm)\s*(ghi chú|note)?\s*(về|có|chứa)?\s*', '', message.lower())
-        query = query.strip()
+    for i, note in enumerate(notes, 1):
+        fields = note.get("fields", {})
+        record_id = note.get("record_id", "")
         
-        if not query:
-            return "❓ Bạn muốn tìm ghi chú gì?"
+        note_key = fields.get("note_key", "Không có tiêu đề")
+        note_value = fields.get("note_value", "")
+        deadline = fields.get("deadline")
+        created_at = fields.get("created_at")
         
-        return await manager.find_note(query)
+        # Format deadline
+        deadline_str = ""
+        if deadline:
+            # Convert from milliseconds
+            deadline_dt = datetime.fromtimestamp(deadline / 1000)
+            deadline_str = f" 📅 {deadline_dt.strftime('%d/%m/%Y %H:%M')}"
+            
+            # Check if overdue
+            if deadline_dt < datetime.now():
+                deadline_str += " ⚠️ Quá hạn!"
+        
+        lines.append(f"**#{i}** {note_key}{deadline_str}")
+        if note_value and note_value != note_key:
+            lines.append(f"   {note_value[:100]}...")
+        lines.append("")
     
-    elif intent == "notes_delete":
-        query = re.sub(r'(xóa|xoá|delete|remove)\s*(ghi chú|note)?\s*(về|có|tên|key)?\s*', '', message.lower())
-        query = query.strip()
-        
-        if not query:
-            return "❓ Bạn muốn xóa ghi chú nào?"
-        
-        return await manager.delete_note_by_query(query)
+    lines.append("💡 Dùng `Done #1` hoặc `Xong #1` để đánh dấu hoàn thành")
+    lines.append("💡 Dùng `Xóa #1` để xóa ghi chú")
     
-    elif intent == "notes_upcoming":
-        days = 7
-        match = re.search(r'(\d+)\s*(ngày|tuần)', message.lower())
-        if match:
-            num = int(match.group(1))
-            unit = match.group(2)
-            days = num * 7 if unit == "tuần" else num
+    return "\n".join(lines)
+
+
+def handle_delete_note(chat_id: str, note_index: str) -> str:
+    """Delete a note by index (1-based)"""
+    notes = get_notes_by_chat(chat_id)
+    
+    try:
+        index = int(note_index) - 1
+        if index < 0 or index >= len(notes):
+            return f"❌ Không tìm thấy ghi chú #{note_index}"
         
-        return await manager.get_upcoming_deadlines(days)
+        note = notes[index]
+        record_id = note.get("record_id")
+        note_key = note.get("fields", {}).get("note_key", "")
+        
+        if delete_note(record_id):
+            return f"✅ Đã xóa ghi chú: **{note_key}**"
+        else:
+            return "❌ Không thể xóa ghi chú. Vui lòng thử lại."
+    
+    except (ValueError, IndexError):
+        return f"❌ Số ghi chú không hợp lệ: {note_index}"
+
+
+def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id") -> str:
+    """
+    Mark a note as done (delete it to stop reminders)
+    
+    NEW in v5.8.0: Fixed "Done" command
+    
+    identifier_type:
+    - "id": Match by note index (1-based)
+    - "title": Match by note title (partial match)
+    """
+    notes = get_notes_by_chat(chat_id)
+    
+    if not notes:
+        return "📝 Bạn chưa có ghi chú nào."
+    
+    if identifier_type == "id":
+        # Match by index
+        try:
+            index = int(identifier) - 1
+            if index < 0 or index >= len(notes):
+                return f"❌ Không tìm thấy ghi chú #{identifier}"
+            
+            note = notes[index]
+        except (ValueError, IndexError):
+            return f"❌ Số ghi chú không hợp lệ: {identifier}"
     
     else:
-        result, _ = await manager.list_notes()
-        return result
-
-
-async def debug_notes():
-    """Debug function để test Notes table"""
-    return await debug_notes_table()
-
-
-# ============ COMPATIBILITY FUNCTIONS ============
-
-_managers: Dict[str, NotesManager] = {}
-
-
-def get_notes_manager(chat_id: str = "default"):
-    """Lấy hoặc tạo NotesManager instance cho chat_id"""
-    global _scheduler_manager
-    
-    if chat_id == "default":
-        if _scheduler_manager is None:
-            _scheduler_manager = SchedulerNotesManager()
-        return _scheduler_manager
-    
-    if chat_id not in _managers:
-        _managers[chat_id] = NotesManager(chat_id)
-    return _managers[chat_id]
-
-
-def check_note_command(text: str) -> Optional[Dict]:
-    """
-    Kiểm tra xem text có phải là lệnh note không
-    Returns: Dict với action và params, hoặc None
-    
-    Commands:
-    - "note: ..." hoặc "ghi nhớ: ..." -> add
-    - "xem note" hoặc "tổng hợp note" -> summary  
-    - "done tiêu đề" hoặc "finished # record_id" -> done (NEW v5.7.14)
-    - "xóa note #1" -> delete
-    - "xóa tất cả note" -> clear_all
-    - "deadline" hoặc "nhắc nhở" -> upcoming
-    """
-    text_lower = text.lower().strip()
-    
-    # Remove @Jarvis prefix
-    text_clean = re.sub(r'^@?jarvis\s*', '', text, flags=re.IGNORECASE).strip()
-    text_clean_lower = text_clean.lower()
-    
-    # ===== NEW v5.7.14: DONE BY TITLE =====
-    # Pattern: Done "tiêu đề" hoặc Done tiêu đề
-    # Examples:
-    # - Done "sửa lại quy trình booking"
-    # - Finished "Change 20ml packaging"
-    # - Xong "modify the booking process"
-    # - Hoàn thành "Check the process of pushing order notes"
-    done_title_patterns = [
-        r'^(?:done|finished|xong|hoàn thành|hoan thanh)\s*["\'](.+?)["\']',  # Done "title"
-        r'^(?:done|finished|xong|hoàn thành|hoan thanh)\s+(.+)$',  # Done title (no quotes)
-    ]
-    
-    for pattern in done_title_patterns:
-        match = re.match(pattern, text_clean_lower, re.IGNORECASE)
-        if match:
-            title = match.group(1).strip()
-            # Exclude if title looks like a record_id pattern
-            if title.startswith('#') or title.startswith('rec'):
-                continue
-            if title:
-                print(f"📝 Detected Done by title: {title}")
-                return {"action": "done_title", "title": title}
-    
-    # ===== NEW v5.7.14: DONE BY RECORD_ID =====
-    # Pattern: Done # record_id hoặc Finished # recv6cxNjZL4dF
-    done_record_patterns = [
-        r'^(?:done|finished|xong|hoàn thành|hoan thanh)\s*#\s*(\w+)',  # Done # record_id
-        r'^(?:done|finished|xong|hoàn thành|hoan thanh)\s+(rec\w+)',  # Done recXXX
-    ]
-    
-    for pattern in done_record_patterns:
-        match = re.match(pattern, text_clean_lower, re.IGNORECASE)
-        if match:
-            record_id = match.group(1).strip()
-            if record_id:
-                print(f"📝 Detected Done by record_id: {record_id}")
-                return {"action": "done_record", "record_id": record_id}
-    
-    # 1. Add note
-    add_patterns = [
-        r'^note\s*[:\-]?\s*(.+)$',
-        r'^ghi\s*nhớ\s*[:\-]?\s*(.+)$',
-        r'^ghi\s*nho\s*[:\-]?\s*(.+)$',
-        r'^todo\s*[:\-]?\s*(.+)$',
-        r'^nhớ\s*[:\-]?\s*(.+)$',
-        r'^nhắc\s*[:\-]?\s*(.+)$',
-        r'^vấn\s*đề\s*[:\-]?\s*(.+)$',
-        r'^van\s*de\s*[:\-]?\s*(.+)$',
-    ]
-    
-    for pattern in add_patterns:
-        match = re.match(pattern, text_clean_lower, re.DOTALL)
-        if match:
-            start_pos = match.start(1)
-            content = text_clean[start_pos:].strip()
-            return {"action": "add", "content": content}
-    
-    # 2. Summary/List notes
-    summary_keywords = [
-        "xem note", "xem ghi chú", "tổng hợp note", "tong hop note",
-        "danh sách note", "list note", "các note", "cac note",
-        "note của tôi", "note cua toi", "my notes"
-    ]
-    
-    if any(kw in text_clean_lower for kw in summary_keywords):
-        return {"action": "summary"}
-    
-    # 3. OLD Done patterns (by number - deprecated but keep for compatibility)
-    done_patterns = [
-        r'(?:hoàn thành|hoan thanh|done|xong)\s*#?(\d+)',
-        r'#(\d+)\s*(?:hoàn thành|hoan thanh|done|xong)',
-    ]
-    
-    for pattern in done_patterns:
-        match = re.search(pattern, text_clean_lower)
-        if match:
-            return {"action": "done", "note_id": int(match.group(1))}
-    
-    # 4. Delete note
-    delete_patterns = [
-        r'(?:xóa|xoa|delete|remove)\s*(?:note)?\s*#?(\d+)',
-        r'#(\d+)\s*(?:xóa|xoa|delete)',
-    ]
-    
-    for pattern in delete_patterns:
-        match = re.search(pattern, text_clean_lower)
-        if match:
-            return {"action": "delete", "note_id": int(match.group(1))}
-    
-    # 5. Clear all
-    if any(kw in text_clean_lower for kw in ["xóa tất cả note", "xoa tat ca note", "clear all note", "xóa hết note"]):
-        return {"action": "clear_all"}
-    
-    # 6. Upcoming deadlines
-    if any(kw in text_clean_lower for kw in ["deadline", "nhắc nhở", "nhac nho", "sắp tới", "sap toi", "reminder"]):
-        return {"action": "upcoming"}
-    
-    return None
-
-
-async def handle_note_command(params: Dict, chat_id: str = "default", user_name: str = "") -> str:
-    """
-    Xử lý lệnh note và trả về response
-    Updated v5.7.14: Added done_title and done_record actions
-    """
-    action = params.get("action")
-    manager = NotesManager(chat_id)
-    
-    if action == "summary":
-        result, _ = await manager.list_notes()
-        return result
-    
-    elif action == "add":
-        content = params.get("content", "")
-        if not content:
-            return "❌ Nội dung ghi chú không được trống"
+        # Match by title (partial match)
+        note = None
+        identifier_lower = identifier.lower()
         
-        deadline_text = None
-        deadline_patterns = [
-            r'deadline\s*[:\-]?\s*(.+)$',
-            r'trước\s+(.+)$',
-            r'hạn\s+(.+)$',
-        ]
-        
-        for pattern in deadline_patterns:
-            match = re.search(pattern, content.lower())
-            if match:
-                deadline_text = match.group(1).strip()
-                content = re.sub(pattern, '', content, flags=re.IGNORECASE).strip()
+        for n in notes:
+            note_key = n.get("fields", {}).get("note_key", "").lower()
+            note_value = n.get("fields", {}).get("note_value", "").lower()
+            
+            if identifier_lower in note_key or identifier_lower in note_value:
+                note = n
                 break
         
-        return await manager.add_note(content, deadline_text)
+        if not note:
+            return f"❌ Không tìm thấy ghi chú: **{identifier}**"
     
-    # ===== NEW v5.7.14: Done by title =====
-    elif action == "done_title":
-        title = params.get("title", "")
-        if not title:
-            return "❌ Vui lòng nhập tiêu đề ghi chú cần hoàn thành"
-        return await manager.mark_done_by_title(title)
+    # Delete the note to mark as done
+    record_id = note.get("record_id")
+    note_key = note.get("fields", {}).get("note_key", "")
     
-    # ===== NEW v5.7.14: Done by record_id =====
-    elif action == "done_record":
-        record_id = params.get("record_id", "")
-        if not record_id:
-            return "❌ Vui lòng nhập ID ghi chú cần hoàn thành"
-        return await manager.mark_done_by_record_id(record_id)
+    if delete_note(record_id):
+        return f"✅ Đã hoàn thành: **{note_key}**\n🔔 Sẽ dừng nhắc nhở về ghi chú này."
+    else:
+        return "❌ Không thể đánh dấu hoàn thành. Vui lòng thử lại."
+
+
+def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
+    """Update an existing note"""
+    notes = get_notes_by_chat(chat_id)
     
-    # OLD done by number (deprecated)
-    elif action == "done":
-        note_id = params.get("note_id")
-        return await manager.find_note(f"#{note_id}")
+    try:
+        index = int(note_index) - 1
+        if index < 0 or index >= len(notes):
+            return f"❌ Không tìm thấy ghi chú #{note_index}"
+        
+        note = notes[index]
+        record_id = note.get("record_id")
+        
+        fields = {
+            "note_key": note_key,
+            "note_value": note_value
+        }
+        if deadline:
+            fields["deadline"] = deadline
+        
+        if update_note(record_id, fields):
+            response = f"✅ Đã cập nhật ghi chú #{note_index}: **{note_key}**"
+            if deadline:
+                response += f"\n📅 Hạn mới: {deadline.strftime('%d/%m/%Y %H:%M')}"
+            return response
+        else:
+            return "❌ Không thể cập nhật ghi chú. Vui lòng thử lại."
+    
+    except (ValueError, IndexError):
+        return f"❌ Số ghi chú không hợp lệ: {note_index}"
+
+
+# ============================================================================
+# REMINDER FUNCTIONS
+# ============================================================================
+
+def get_due_reminders(hours: int = 24) -> List[Dict]:
+    """Get notes that are due within the next N hours"""
+    return get_notes_due_soon(hours)
+
+
+def format_reminder_message(note: Dict) -> str:
+    """Format a reminder notification"""
+    fields = note.get("fields", {})
+    note_key = fields.get("note_key", "Nhắc nhở")
+    note_value = fields.get("note_value", "")
+    deadline = fields.get("deadline")
+    
+    lines = ["🔔 **NHẮC NHỞ**", ""]
+    lines.append(f"📌 **{note_key}**")
+    
+    if note_value and note_value != note_key:
+        lines.append(f"📝 {note_value}")
+    
+    if deadline:
+        deadline_dt = datetime.fromtimestamp(deadline / 1000)
+        time_str = deadline_dt.strftime('%H:%M %d/%m/%Y')
+        
+        # Time until deadline
+        delta = deadline_dt - datetime.now()
+        if delta.total_seconds() > 0:
+            hours = int(delta.total_seconds() // 3600)
+            minutes = int((delta.total_seconds() % 3600) // 60)
+            
+            if hours > 0:
+                lines.append(f"⏰ Còn {hours} giờ {minutes} phút")
+            else:
+                lines.append(f"⏰ Còn {minutes} phút")
+        else:
+            lines.append("⚠️ Đã quá hạn!")
+        
+        lines.append(f"📅 Hạn: {time_str}")
+    
+    lines.append("")
+    lines.append("💡 Dùng `Done [tiêu đề]` hoặc `Xong #ID` để hoàn thành")
+    
+    return "\n".join(lines)
+
+
+# ============================================================================
+# MAIN COMMAND HANDLER
+# ============================================================================
+
+def process_note_command(command_info: Dict[str, Any]) -> str:
+    """
+    Process a parsed note command
+    
+    command_info from check_note_command()
+    """
+    action = command_info.get("action")
+    chat_id = command_info.get("chat_id")
+    
+    if action == "add":
+        return handle_add_note(
+            chat_id,
+            command_info.get("note_key", ""),
+            command_info.get("note_value", ""),
+            command_info.get("deadline")
+        )
+    
+    elif action == "view":
+        return handle_view_notes(chat_id)
     
     elif action == "delete":
-        note_id = params.get("note_id")
-        return await manager.delete_note_by_query(f"#{note_id}")
+        return handle_delete_note(chat_id, command_info.get("note_id", "0"))
     
-    elif action == "clear_all":
-        notes = await get_notes_by_chat_id(chat_id)
-        count = 0
-        for note in notes:
-            await delete_note(note["record_id"])
-            count += 1
-        return f"🗑️ Đã xóa tất cả {count} ghi chú"
+    elif action == "done":
+        return handle_done_note(
+            chat_id,
+            command_info.get("note_id") or command_info.get("note_title", ""),
+            command_info.get("identifier_type", "id")
+        )
     
-    elif action == "upcoming":
-        return await manager.get_upcoming_deadlines(7)
+    elif action == "update":
+        return handle_update_note(
+            chat_id,
+            command_info.get("note_id", "0"),
+            command_info.get("note_key", ""),
+            command_info.get("note_value", ""),
+            command_info.get("deadline")
+        )
     
     return "❌ Lệnh không hợp lệ"
+
+
+# ============================================================================
+# TESTING
+# ============================================================================
+
+if __name__ == "__main__":
+    print("Testing notes_manager.py v5.8.0...")
+    
+    # Test done patterns
+    test_messages = [
+        "Done #1",
+        "done 2",
+        "Xong #3",
+        "hoàn thành 4",
+        "Done Họp team",
+        "Xong gọi khách",
+        "đã xong báo cáo tuần",
+        "#1 done",
+        "#2 xong",
+    ]
+    
+    print("\n=== Testing DONE patterns ===")
+    for msg in test_messages:
+        result = check_note_command(msg, "test_chat_123")
+        if result and result.get("action") == "done":
+            print(f"✅ '{msg}' -> {result}")
+        else:
+            print(f"❌ '{msg}' -> Not matched as DONE")
+    
+    # Test add patterns
+    add_messages = [
+        "Ghi chú: Họp team deadline 15/12",
+        "Nhắc tôi gọi khách hạn 10h30 ngày mai",
+        "Note: Review code",
+    ]
+    
+    print("\n=== Testing ADD patterns ===")
+    for msg in add_messages:
+        result = check_note_command(msg, "test_chat_123")
+        if result and result.get("action") == "add":
+            print(f"✅ '{msg}' -> {result}")
+        else:
+            print(f"❌ '{msg}' -> Not matched as ADD")
