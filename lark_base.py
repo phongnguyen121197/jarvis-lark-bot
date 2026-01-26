@@ -670,11 +670,25 @@ async def generate_koc_summary(
                     "contact_deal": 0
                 }
             
-            # Add KPI values (they might be per product row)
-            staff_kpi[nhan_su]["video_kpi"] += fields.get("KPI Số lư...", 0) or fields.get("KPI Số lượng", 0) or fields.get("KPI số lượng tổ...", 0) or 0
-            staff_kpi[nhan_su]["budget_kpi"] += fields.get("KPI ngân sách", 0) or fields.get("Ngân sách tổng...", 0) or 0
-            staff_kpi[nhan_su]["contact_total"] += fields.get("Tổng liên hệ", 0) or 0
-            staff_kpi[nhan_su]["contact_deal"] += fields.get("Đã deal", 0) or fields.get("# Đã deal", 0) or 0
+            # Add KPI values (they might be per product row) - safely convert to number
+            def safe_number(val):
+                """Convert value to number safely"""
+                if val is None:
+                    return 0
+                if isinstance(val, (int, float)):
+                    return val
+                if isinstance(val, str):
+                    try:
+                        # Remove commas and convert
+                        return float(val.replace(",", "").replace(" ", "")) if val.strip() else 0
+                    except:
+                        return 0
+                return 0
+            
+            staff_kpi[nhan_su]["video_kpi"] += safe_number(fields.get("KPI Số lư...", 0) or fields.get("KPI Số lượng", 0) or fields.get("KPI số lượng tổ...", 0))
+            staff_kpi[nhan_su]["budget_kpi"] += safe_number(fields.get("KPI ngân sách", 0) or fields.get("Ngân sách tổng...", 0))
+            staff_kpi[nhan_su]["contact_total"] += safe_number(fields.get("Tổng liên hệ", 0))
+            staff_kpi[nhan_su]["contact_deal"] += safe_number(fields.get("Đã deal", 0) or fields.get("# Đã deal", 0))
     
     logger.info(f"📊 Staff KPI lookup: {list(staff_kpi.keys())}")
     
