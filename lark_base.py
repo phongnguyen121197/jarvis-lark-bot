@@ -1,7 +1,7 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
-Version 5.7.2 - Added Calendar integration, fixed datetime format
+Version 5.7.15 - Added content_by_nhan_su aggregation for KPI reports
 """
 import os
 import re
@@ -387,6 +387,31 @@ def safe_number(val, default=0):
     return default
 
 
+def extract_loai_video(record: Dict) -> Optional[str]:
+    """
+    Trích xuất field "Loại video" từ record
+    Các giá trị: Cart, Text, Video
+    v5.7.15 - Added for content breakdown
+    """
+    fields = record if "fields" not in record else record.get("fields", {})
+    
+    # Các tên field có thể có
+    possible_names = [
+        "Loại video",
+        "Loai video", 
+        "Loại Video",
+        "Content Type",
+        "Type",
+    ]
+    
+    for name in possible_names:
+        value = fields.get(name)
+        if value:
+            return safe_extract_text(value)
+    
+    return None
+
+
 def find_phan_loai_field(fields: Dict) -> Optional[str]:
     """Tìm field phân loại sản phẩm trong record."""
     possible_names = [
@@ -601,12 +626,16 @@ async def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
             else:
                 san_pham = str(first)
         
+        # Parse loại video (v5.7.15)
+        loai_video = extract_loai_video(fields)
+        
         parsed.append({
             "record_id": r.get("record_id"),
             "thang": thang,
             "tuan": tuan,
             "san_pham": san_pham,
             "nhan_su": nhan_su,
+            "loai_video": loai_video,  # v5.7.15 - content breakdown
             # KPI targets (THÁNG)
             "kpi_so_luong": safe_number(fields.get("KPI Số lượng") or fields.get("KPI số lượng")),
             "kpi_ngan_sach": safe_number(fields.get("KPI ngân sách")),
@@ -1035,6 +1064,47 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
     # === TÍNH GMV TỪ BẢNG DOANH THU TỔNG (chính xác) ===
     total_gmv = sum(r.get("gmv", 0) for r in doanh_thu_tong_records)
     
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.15) ===
+    # Aggregate content theo nhân sự, sản phẩm và loại video (Cart/Text/Video)
+    content_by_nhan_su = {}
+    for r in dashboard_records:
+        nhan_su = r.get("nhan_su")
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        else:
+            continue
+        
+        san_pham = r.get("san_pham") or "N/A"
+        loai_video = r.get("loai_video") or "Video"  # Default to "Video" if not specified
+        so_luong_air = int(r.get("so_luong_tong_air") or r.get("so_luong_air") or 0)
+        
+        if so_luong_air == 0:
+            continue
+        
+        if nhan_su not in content_by_nhan_su:
+            content_by_nhan_su[nhan_su] = []
+        
+        # Tìm xem đã có entry cho sản phẩm + loại này chưa
+        found = False
+        for item in content_by_nhan_su[nhan_su]:
+            if item["san_pham"] == san_pham and item["loai"] == loai_video:
+                item["so_luong"] += so_luong_air
+                found = True
+                break
+        
+        if not found:
+            content_by_nhan_su[nhan_su].append({
+                "san_pham": san_pham,
+                "loai": loai_video,
+                "so_luong": so_luong_air
+            })
+    
+    # Sort content items theo số lượng giảm dần
+    for nhan_su in content_by_nhan_su:
+        content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
+    
+    print(f"📝 CHENG Content breakdown: {len(content_by_nhan_su)} nhân sự")
+    
     # === Tổng quan ===
     total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
     total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
@@ -1059,6 +1129,7 @@ async def generate_cheng_koc_summary(month: int = None, week: int = None) -> Dic
         "kpi_nhan_su": kpi_by_nhan_su,
         "lien_he_nhan_su": lien_he_by_nhan_su,
         "top_koc": top_koc,
+        "content_by_nhan_su": content_by_nhan_su,  # v5.7.15 - content breakdown
     }
 
 
@@ -1657,11 +1728,15 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
         if week and tuan != week:
             continue
         
+        # Parse loại video (v5.7.15)
+        loai_video = extract_loai_video(fields)
+        
         result.append({
             "nhan_su": safe_extract_person_name(fields.get("Nhân sự book")),
             "san_pham": fields.get("Sản phẩm"),
             "thang": thang,
             "tuan": tuan,
+            "loai_video": loai_video,  # v5.7.15 - content breakdown
             "kpi_so_luong": fields.get("KPI Số lượng"),
             "kpi_ngan_sach": fields.get("KPI ngân sách"),
             "so_luong_deal": fields.get("Số lượng - Deal", 0),
@@ -1934,6 +2009,47 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.15) ===
+    # Aggregate content theo nhân sự, sản phẩm và loại video (Cart/Text/Video)
+    content_by_nhan_su = {}
+    for r in dashboard_records:
+        nhan_su = r.get("nhan_su")
+        if nhan_su:
+            nhan_su = nhan_su.strip()
+        else:
+            continue
+        
+        san_pham = r.get("san_pham") or "N/A"
+        loai_video = r.get("loai_video") or "Video"  # Default to "Video" if not specified
+        so_luong_air = int(r.get("so_luong_tong_air") or r.get("so_luong_air") or 0)
+        
+        if so_luong_air == 0:
+            continue
+        
+        if nhan_su not in content_by_nhan_su:
+            content_by_nhan_su[nhan_su] = []
+        
+        # Tìm xem đã có entry cho sản phẩm + loại này chưa
+        found = False
+        for item in content_by_nhan_su[nhan_su]:
+            if item["san_pham"] == san_pham and item["loai"] == loai_video:
+                item["so_luong"] += so_luong_air
+                found = True
+                break
+        
+        if not found:
+            content_by_nhan_su[nhan_su].append({
+                "san_pham": san_pham,
+                "loai": loai_video,
+                "so_luong": so_luong_air
+            })
+    
+    # Sort content items theo số lượng giảm dần
+    for nhan_su in content_by_nhan_su:
+        content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
+    
+    print(f"📝 KALLE Content breakdown: {len(content_by_nhan_su)} nhân sự")
+    
     # Tổng quan
     total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
     total_so_luong_air = sum(d["so_luong_air"] for d in kpi_by_nhan_su.values())
@@ -1958,6 +2074,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         "kpi_nhan_su": kpi_by_nhan_su,
         "top_koc": top_koc,
         "lien_he_nhan_su": lien_he_by_nhan_su,
+        "content_by_nhan_su": content_by_nhan_su,  # v5.7.15 - content breakdown
     }
 
 
