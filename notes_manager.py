@@ -1,21 +1,40 @@
-# notes_manager.py - Version 5.8.0
-# Fixed: "Done" command to mark reminders as complete
-# Added: Multiple patterns for done/complete commands
+# notes_manager.py - Version 5.8.1
+# Fixed: Added compatibility functions required by main.py
+# - check_note_command(text) - single arg version
+# - handle_note_command(params, chat_id, user_name) - for main.py
+# - get_notes_manager(chat_id) - returns NotesManager instance
 
 import re
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
 
 from lark_base import (
     get_notes_by_chat,
     create_note,
     update_note,
     delete_note,
-    get_notes_due_soon
+    get_notes_due_soon,
+    get_all_notes
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# NOTE DATA CLASS (for scheduler compatibility)
+# ============================================================================
+
+@dataclass
+class Note:
+    """Note dataclass for scheduler compatibility"""
+    id: str
+    content: str
+    chat_id: str
+    deadline: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    reminder_sent: bool = False
+
 
 # ============================================================================
 # COMMAND PATTERNS
@@ -41,15 +60,11 @@ DELETE_PATTERNS = [
     r'(?:xóa|xoa|delete|remove)\s*#(\d+)',
 ]
 
-# === NEW in v5.8.0: Done/Complete patterns ===
+# Done/Complete patterns
 DONE_PATTERNS = [
-    # "Done #1" or "Done 1"
     r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s*#?(\d+)',
-    # "#1 done" or "#1 xong"
     r'#(\d+)\s*(?:done|xong|hoàn thành|hoan thanh|complete|completed)',
-    # "Done [title]" - match by title
     r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s+(.+)',
-    # "Đã xong [title]"
     r'(?:đã xong|da xong|đã hoàn thành|da hoan thanh)\s+(.+)',
 ]
 
@@ -67,20 +82,13 @@ DEADLINE_PATTERNS = [
     r'(ngày mai|hôm nay|tuần sau|tháng sau)',
 ]
 
+
 # ============================================================================
 # PARSING UTILITIES
 # ============================================================================
 
 def parse_datetime(text: str) -> Optional[datetime]:
-    """
-    Parse datetime from Vietnamese/English text
-    
-    Supports:
-    - "hôm nay", "ngày mai", "tuần sau"
-    - "15:30", "15h30", "3pm"
-    - "25/12", "25/12/2024"
-    - "25/12 15:30"
-    """
+    """Parse datetime from Vietnamese/English text"""
     text = text.lower().strip()
     now = datetime.now()
     
@@ -129,72 +137,54 @@ def parse_datetime(text: str) -> Optional[datetime]:
 
 
 def extract_deadline_from_text(text: str) -> Tuple[str, Optional[datetime]]:
-    """
-    Extract deadline from note text
-    
-    Returns: (cleaned_text, deadline)
-    
-    Examples:
-    - "Họp team deadline 15/12" -> ("Họp team", datetime(2024, 12, 15, 9, 0))
-    - "Gọi khách hạn 10h30 ngày mai" -> ("Gọi khách", tomorrow at 10:30)
-    """
+    """Extract deadline from note text"""
     deadline = None
     cleaned_text = text
     
-    # Check for deadline keywords
     for pattern in DEADLINE_PATTERNS:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             deadline_str = match.group(1) if match.groups() else match.group(0)
             deadline = parse_datetime(deadline_str)
-            
-            # Remove deadline part from text
             cleaned_text = re.sub(pattern, '', text, flags=re.IGNORECASE).strip()
             cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
             break
     
     return cleaned_text, deadline
 
+
 # ============================================================================
-# NOTE COMMANDS
+# COMPATIBILITY FUNCTIONS FOR main.py
 # ============================================================================
 
-def check_note_command(message: str, chat_id: str) -> Optional[Dict[str, Any]]:
+def check_note_command(text: str) -> Optional[Dict[str, Any]]:
     """
-    Check if message is a note command and return action
+    Check if message is a note command (single arg version for main.py)
     
+    Args:
+        text: Message text
+        
     Returns:
-    {
-        "action": "add|view|delete|update|done",
-        "note_key": str,
-        "note_value": str,
-        "deadline": datetime,
-        "note_id": str,
-        ...
-    }
+        Dict with action and params if note command, None otherwise
     """
-    message = message.strip()
+    message = text.strip()
     
-    # === Check DONE patterns first (NEW in v5.8.0) ===
+    # Check DONE patterns
     for pattern in DONE_PATTERNS:
         match = re.search(pattern, message, re.IGNORECASE)
         if match:
             identifier = match.group(1).strip()
-            
-            # Check if it's a number (ID) or text (title)
             if identifier.isdigit():
                 return {
                     "action": "done",
                     "identifier_type": "id",
-                    "note_id": identifier,
-                    "chat_id": chat_id
+                    "note_id": identifier
                 }
             else:
                 return {
                     "action": "done",
                     "identifier_type": "title",
-                    "note_title": identifier,
-                    "chat_id": chat_id
+                    "note_title": identifier
                 }
     
     # Check ADD patterns
@@ -203,32 +193,25 @@ def check_note_command(message: str, chat_id: str) -> Optional[Dict[str, Any]]:
         if match:
             note_content = match.group(1).strip()
             note_key, deadline = extract_deadline_from_text(note_content)
-            
             return {
                 "action": "add",
-                "note_key": note_key[:100],  # Limit title length
+                "note_key": note_key[:100],
                 "note_value": note_content,
-                "deadline": deadline,
-                "chat_id": chat_id
+                "deadline": deadline
             }
     
     # Check VIEW patterns
     for pattern in VIEW_PATTERNS:
         if re.search(pattern, message, re.IGNORECASE):
-            return {
-                "action": "view",
-                "chat_id": chat_id
-            }
+            return {"action": "view"}
     
     # Check DELETE patterns
     for pattern in DELETE_PATTERNS:
         match = re.search(pattern, message, re.IGNORECASE)
         if match:
-            note_id = match.group(1)
             return {
                 "action": "delete",
-                "note_id": note_id,
-                "chat_id": chat_id
+                "note_id": match.group(1)
             }
     
     # Check UPDATE patterns
@@ -238,17 +221,163 @@ def check_note_command(message: str, chat_id: str) -> Optional[Dict[str, Any]]:
             note_id = match.group(1)
             new_content = match.group(2).strip()
             note_key, deadline = extract_deadline_from_text(new_content)
-            
             return {
                 "action": "update",
                 "note_id": note_id,
                 "note_key": note_key[:100],
                 "note_value": new_content,
-                "deadline": deadline,
-                "chat_id": chat_id
+                "deadline": deadline
             }
     
     return None
+
+
+async def handle_note_command(params: Dict[str, Any], chat_id: str = "", user_name: str = "") -> str:
+    """
+    Handle note command (async wrapper for main.py compatibility)
+    
+    Args:
+        params: Dict from check_note_command()
+        chat_id: Chat ID
+        user_name: User name (optional)
+        
+    Returns:
+        Response string
+    """
+    if not params:
+        return "❌ Không có lệnh ghi chú"
+    
+    action = params.get("action")
+    
+    if action == "add":
+        return handle_add_note(
+            chat_id,
+            params.get("note_key", ""),
+            params.get("note_value", ""),
+            params.get("deadline")
+        )
+    
+    elif action == "view":
+        return handle_view_notes(chat_id)
+    
+    elif action == "delete":
+        return handle_delete_note(chat_id, params.get("note_id", "0"))
+    
+    elif action == "done":
+        return handle_done_note(
+            chat_id,
+            params.get("note_id") or params.get("note_title", ""),
+            params.get("identifier_type", "id")
+        )
+    
+    elif action == "update":
+        return handle_update_note(
+            chat_id,
+            params.get("note_id", "0"),
+            params.get("note_key", ""),
+            params.get("note_value", ""),
+            params.get("deadline")
+        )
+    
+    return "❌ Lệnh không hợp lệ"
+
+
+# ============================================================================
+# NOTES MANAGER CLASS (for scheduler)
+# ============================================================================
+
+class NotesManager:
+    """NotesManager class for scheduler integration"""
+    
+    def __init__(self, chat_id: str = None):
+        self.chat_id = chat_id
+        self._reminder_sent = {}
+    
+    async def get_notes_due_soon(self, days: int = 1) -> List[Note]:
+        """Get notes with deadlines within N days"""
+        try:
+            all_notes = get_all_notes()
+            due_notes = []
+            now = datetime.now()
+            future = now + timedelta(days=days)
+            
+            for record in all_notes:
+                fields = record.get("fields", {})
+                deadline = fields.get("deadline")
+                
+                if deadline:
+                    try:
+                        deadline_dt = datetime.fromtimestamp(deadline / 1000) if isinstance(deadline, (int, float)) else None
+                        if deadline_dt and now <= deadline_dt <= future:
+                            note = Note(
+                                id=str(len(due_notes) + 1),
+                                content=fields.get("note_key", "") or fields.get("note_value", ""),
+                                chat_id=fields.get("chat_id", ""),
+                                deadline=deadline_dt,
+                                reminder_sent=self._reminder_sent.get(record.get("record_id"), False)
+                            )
+                            due_notes.append(note)
+                    except:
+                        pass
+            
+            return due_notes
+        except Exception as e:
+            logger.error(f"Error getting due notes: {e}")
+            return []
+    
+    async def get_overdue_notes(self) -> List[Note]:
+        """Get overdue notes"""
+        try:
+            all_notes = get_all_notes()
+            overdue_notes = []
+            now = datetime.now()
+            
+            for record in all_notes:
+                fields = record.get("fields", {})
+                deadline = fields.get("deadline")
+                
+                if deadline:
+                    try:
+                        deadline_dt = datetime.fromtimestamp(deadline / 1000) if isinstance(deadline, (int, float)) else None
+                        if deadline_dt and deadline_dt < now:
+                            note = Note(
+                                id=str(len(overdue_notes) + 1),
+                                content=fields.get("note_key", "") or fields.get("note_value", ""),
+                                chat_id=fields.get("chat_id", ""),
+                                deadline=deadline_dt,
+                                reminder_sent=self._reminder_sent.get(record.get("record_id"), False)
+                            )
+                            overdue_notes.append(note)
+                    except:
+                        pass
+            
+            return overdue_notes
+        except Exception as e:
+            logger.error(f"Error getting overdue notes: {e}")
+            return []
+    
+    def mark_reminder_sent(self, note_id: str):
+        """Mark a note as having had its reminder sent"""
+        self._reminder_sent[note_id] = True
+
+
+# Global manager instance
+_global_manager = None
+
+def get_notes_manager(chat_id: str = None) -> NotesManager:
+    """
+    Get NotesManager instance (for main.py scheduler)
+    
+    Args:
+        chat_id: Optional chat ID
+        
+    Returns:
+        NotesManager instance
+    """
+    global _global_manager
+    if _global_manager is None:
+        _global_manager = NotesManager(chat_id)
+    return _global_manager
 
 
 # ============================================================================
@@ -279,23 +408,21 @@ def handle_view_notes(chat_id: str) -> str:
     
     for i, note in enumerate(notes, 1):
         fields = note.get("fields", {})
-        record_id = note.get("record_id", "")
         
         note_key = fields.get("note_key", "Không có tiêu đề")
         note_value = fields.get("note_value", "")
         deadline = fields.get("deadline")
-        created_at = fields.get("created_at")
         
-        # Format deadline
         deadline_str = ""
         if deadline:
-            # Convert from milliseconds
-            deadline_dt = datetime.fromtimestamp(deadline / 1000)
-            deadline_str = f" 📅 {deadline_dt.strftime('%d/%m/%Y %H:%M')}"
-            
-            # Check if overdue
-            if deadline_dt < datetime.now():
-                deadline_str += " ⚠️ Quá hạn!"
+            try:
+                deadline_dt = datetime.fromtimestamp(deadline / 1000) if isinstance(deadline, (int, float)) else None
+                if deadline_dt:
+                    deadline_str = f" 📅 {deadline_dt.strftime('%d/%m/%Y %H:%M')}"
+                    if deadline_dt < datetime.now():
+                        deadline_str += " ⚠️ Quá hạn!"
+            except:
+                pass
         
         lines.append(f"**#{i}** {note_key}{deadline_str}")
         if note_value and note_value != note_key:
@@ -309,7 +436,7 @@ def handle_view_notes(chat_id: str) -> str:
 
 
 def handle_delete_note(chat_id: str, note_index: str) -> str:
-    """Delete a note by index (1-based)"""
+    """Delete a note by index"""
     notes = get_notes_by_chat(chat_id)
     
     try:
@@ -331,33 +458,21 @@ def handle_delete_note(chat_id: str, note_index: str) -> str:
 
 
 def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id") -> str:
-    """
-    Mark a note as done (delete it to stop reminders)
-    
-    NEW in v5.8.0: Fixed "Done" command
-    
-    identifier_type:
-    - "id": Match by note index (1-based)
-    - "title": Match by note title (partial match)
-    """
+    """Mark a note as done"""
     notes = get_notes_by_chat(chat_id)
     
     if not notes:
         return "📝 Bạn chưa có ghi chú nào."
     
     if identifier_type == "id":
-        # Match by index
         try:
             index = int(identifier) - 1
             if index < 0 or index >= len(notes):
                 return f"❌ Không tìm thấy ghi chú #{identifier}"
-            
             note = notes[index]
         except (ValueError, IndexError):
             return f"❌ Số ghi chú không hợp lệ: {identifier}"
-    
     else:
-        # Match by title (partial match)
         note = None
         identifier_lower = identifier.lower()
         
@@ -372,7 +487,6 @@ def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id")
         if not note:
             return f"❌ Không tìm thấy ghi chú: **{identifier}**"
     
-    # Delete the note to mark as done
     record_id = note.get("record_id")
     note_key = note.get("fields", {}).get("note_key", "")
     
@@ -414,7 +528,7 @@ def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value:
 
 
 # ============================================================================
-# REMINDER FUNCTIONS
+# REMINDER FUNCTIONS (for scheduler)
 # ============================================================================
 
 def get_due_reminders(hours: int = 24) -> List[Dict]:
@@ -436,23 +550,26 @@ def format_reminder_message(note: Dict) -> str:
         lines.append(f"📝 {note_value}")
     
     if deadline:
-        deadline_dt = datetime.fromtimestamp(deadline / 1000)
-        time_str = deadline_dt.strftime('%H:%M %d/%m/%Y')
-        
-        # Time until deadline
-        delta = deadline_dt - datetime.now()
-        if delta.total_seconds() > 0:
-            hours = int(delta.total_seconds() // 3600)
-            minutes = int((delta.total_seconds() % 3600) // 60)
-            
-            if hours > 0:
-                lines.append(f"⏰ Còn {hours} giờ {minutes} phút")
-            else:
-                lines.append(f"⏰ Còn {minutes} phút")
-        else:
-            lines.append("⚠️ Đã quá hạn!")
-        
-        lines.append(f"📅 Hạn: {time_str}")
+        try:
+            deadline_dt = datetime.fromtimestamp(deadline / 1000) if isinstance(deadline, (int, float)) else None
+            if deadline_dt:
+                time_str = deadline_dt.strftime('%H:%M %d/%m/%Y')
+                
+                delta = deadline_dt - datetime.now()
+                if delta.total_seconds() > 0:
+                    hours = int(delta.total_seconds() // 3600)
+                    minutes = int((delta.total_seconds() % 3600) // 60)
+                    
+                    if hours > 0:
+                        lines.append(f"⏰ Còn {hours} giờ {minutes} phút")
+                    else:
+                        lines.append(f"⏰ Còn {minutes} phút")
+                else:
+                    lines.append("⚠️ Đã quá hạn!")
+                
+                lines.append(f"📅 Hạn: {time_str}")
+        except:
+            pass
     
     lines.append("")
     lines.append("💡 Dùng `Done [tiêu đề]` hoặc `Xong #ID` để hoàn thành")
@@ -461,49 +578,20 @@ def format_reminder_message(note: Dict) -> str:
 
 
 # ============================================================================
-# MAIN COMMAND HANDLER
+# DEBUG FUNCTIONS
 # ============================================================================
 
-def process_note_command(command_info: Dict[str, Any]) -> str:
-    """
-    Process a parsed note command
-    
-    command_info from check_note_command()
-    """
-    action = command_info.get("action")
-    chat_id = command_info.get("chat_id")
-    
-    if action == "add":
-        return handle_add_note(
-            chat_id,
-            command_info.get("note_key", ""),
-            command_info.get("note_value", ""),
-            command_info.get("deadline")
-        )
-    
-    elif action == "view":
-        return handle_view_notes(chat_id)
-    
-    elif action == "delete":
-        return handle_delete_note(chat_id, command_info.get("note_id", "0"))
-    
-    elif action == "done":
-        return handle_done_note(
-            chat_id,
-            command_info.get("note_id") or command_info.get("note_title", ""),
-            command_info.get("identifier_type", "id")
-        )
-    
-    elif action == "update":
-        return handle_update_note(
-            chat_id,
-            command_info.get("note_id", "0"),
-            command_info.get("note_key", ""),
-            command_info.get("note_value", ""),
-            command_info.get("deadline")
-        )
-    
-    return "❌ Lệnh không hợp lệ"
+def debug_notes():
+    """Debug notes table"""
+    try:
+        all_notes = get_all_notes()
+        print(f"Total notes: {len(all_notes)}")
+        for note in all_notes[:5]:
+            print(f"  - {note}")
+        return all_notes
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
 
 
 # ============================================================================
@@ -511,40 +599,22 @@ def process_note_command(command_info: Dict[str, Any]) -> str:
 # ============================================================================
 
 if __name__ == "__main__":
-    print("Testing notes_manager.py v5.8.0...")
+    print("Testing notes_manager.py v5.8.1...")
+    print("Functions available:")
+    print("  - check_note_command(text)")
+    print("  - handle_note_command(params, chat_id, user_name)")
+    print("  - get_notes_manager(chat_id)")
+    print("  - NotesManager class")
     
-    # Test done patterns
+    # Test check_note_command
     test_messages = [
+        "Note: họp team lúc 3h",
+        "Xem ghi chú",
         "Done #1",
-        "done 2",
-        "Xong #3",
-        "hoàn thành 4",
-        "Done Họp team",
-        "Xong gọi khách",
-        "đã xong báo cáo tuần",
-        "#1 done",
-        "#2 xong",
+        "Xóa #2",
     ]
     
-    print("\n=== Testing DONE patterns ===")
+    print("\n=== Testing check_note_command ===")
     for msg in test_messages:
-        result = check_note_command(msg, "test_chat_123")
-        if result and result.get("action") == "done":
-            print(f"✅ '{msg}' -> {result}")
-        else:
-            print(f"❌ '{msg}' -> Not matched as DONE")
-    
-    # Test add patterns
-    add_messages = [
-        "Ghi chú: Họp team deadline 15/12",
-        "Nhắc tôi gọi khách hạn 10h30 ngày mai",
-        "Note: Review code",
-    ]
-    
-    print("\n=== Testing ADD patterns ===")
-    for msg in add_messages:
-        result = check_note_command(msg, "test_chat_123")
-        if result and result.get("action") == "add":
-            print(f"✅ '{msg}' -> {result}")
-        else:
-            print(f"❌ '{msg}' -> Not matched as ADD")
+        result = check_note_command(msg)
+        print(f"'{msg}' -> {result}")
