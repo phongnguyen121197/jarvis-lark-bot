@@ -1,7 +1,7 @@
 """
 Intent Classifier Module
 Phân loại câu hỏi của người dùng thành các intent
-Version 5.7.2 - Fixed CHENG staff KPI routing
+Version 5.7.13 - Fixed CHENG staff KPI routing (is_dashboard flag)
 """
 import re
 from datetime import datetime, timedelta
@@ -71,7 +71,7 @@ DASHBOARD_KEYWORDS = [
 
 # ============ NHÂN SỰ MAPPING ============
 # Danh sách nhân sự CHENG (để detect và route sang CHENG_REPORT)
-# Updated v5.7.3 - Danh sách đầy đủ từ bảng CHENG Dashboard
+# Updated v5.7.13 - Danh sách đầy đủ từ bảng CHENG Dashboard
 CHENG_NHAN_SU_MAPPING = {
     # Tên đơn - sẽ được match thêm trong report_generator
     "phương": "Phương",  # Could be Phương Anh or Nguyên Phương
@@ -388,6 +388,7 @@ def classify_intent(text: str) -> Dict[str, Any]:
                 break
     
     # Check CHENG staff (only if no KALLE match found)
+    # FIX v5.7.13: Set is_dashboard=True when CHENG staff is detected
     cheng_nhan_su_detected = None
     if not kalle_nhan_su_detected:
         sorted_cheng_mapping = sorted(CHENG_NHAN_SU_MAPPING.items(), key=lambda x: len(x[0]), reverse=True)
@@ -396,6 +397,8 @@ def classify_intent(text: str) -> Dict[str, Any]:
                 pattern = r'\b' + re.escape(short_name) + r'\b'
                 if re.search(pattern, text_lower):
                     cheng_nhan_su_detected = full_name
+                    # FIX v5.7.13: Set is_dashboard=True for CHENG staff KPI queries
+                    is_dashboard = True
                     break
     
     # Nếu detect được nhân sự CHENG → route sang CHENG_REPORT với nhan_su_filter
