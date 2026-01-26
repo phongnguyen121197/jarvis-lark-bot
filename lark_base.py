@@ -281,26 +281,71 @@ def get_notes_due_soon(hours: int = 24) -> List[Dict]:
 
 def get_kalle_booking_records(month: int = None, year: int = None) -> List[Dict]:
     """Get KALLE booking records"""
-    filter_formula = None
+    # Get ALL records first, then filter in Python
+    all_records = get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_BOOKING, None)
     
-    if month and year:
-        # Format month as "01", "02", etc. to match Bitable data
-        month_str = f"{month:02d}"
-        filter_formula = f'CurrentValue.[Tháng air]="{month_str}"'
+    if not month:
+        return all_records
     
-    return get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_BOOKING, filter_formula)
+    # Filter by month in Python
+    month_str_01 = f"{month:02d}"  # "01", "02", etc.
+    month_str_1 = str(month)       # "1", "2", etc.
+    
+    filtered = []
+    for record in all_records:
+        fields = record.get("fields", {})
+        # Try different column names
+        thang_value = fields.get("Tháng air", "") or fields.get("Tháng", "") or fields.get("Tháng báo cáo", "")
+        
+        # Handle if it's a list or dict
+        if isinstance(thang_value, list) and thang_value:
+            thang_value = thang_value[0].get("text", "") if isinstance(thang_value[0], dict) else str(thang_value[0])
+        elif isinstance(thang_value, dict):
+            thang_value = thang_value.get("text", "") or str(thang_value)
+        else:
+            thang_value = str(thang_value) if thang_value else ""
+        
+        # Match month
+        if thang_value in [month_str_01, month_str_1, f"Tháng {month}"]:
+            filtered.append(record)
+    
+    logger.info(f"📊 Booking: {len(all_records)} total, {len(filtered)} for month {month}")
+    return filtered
 
 
 def get_kalle_dashboard_records(month: int = None) -> List[Dict]:
     """Get KALLE dashboard KPI records"""
-    filter_formula = None
+    # Get ALL records first (no filter), then filter in Python if needed
+    # This is because Bitable column names may vary
+    all_records = get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_DASHBOARD, None)
     
-    if month:
-        # Format month as "01", "02", etc. to match Bitable data
-        month_str = f"{month:02d}"
-        filter_formula = f'CurrentValue.[Tháng báo cáo]="{month_str}"'
+    if not month:
+        return all_records
     
-    return get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_DASHBOARD, filter_formula)
+    # Filter by month in Python - try multiple column names and formats
+    month_str_01 = f"{month:02d}"  # "01", "02", etc.
+    month_str_1 = str(month)       # "1", "2", etc.
+    
+    filtered = []
+    for record in all_records:
+        fields = record.get("fields", {})
+        # Try different column names
+        thang_value = fields.get("Tháng báo cáo", "") or fields.get("Tháng", "") or fields.get("Tháng air", "")
+        
+        # Handle if it's a list or dict
+        if isinstance(thang_value, list) and thang_value:
+            thang_value = thang_value[0].get("text", "") if isinstance(thang_value[0], dict) else str(thang_value[0])
+        elif isinstance(thang_value, dict):
+            thang_value = thang_value.get("text", "") or str(thang_value)
+        else:
+            thang_value = str(thang_value) if thang_value else ""
+        
+        # Match month
+        if thang_value in [month_str_01, month_str_1, f"Tháng {month}"]:
+            filtered.append(record)
+    
+    logger.info(f"📊 Dashboard: {len(all_records)} total, {len(filtered)} for month {month}")
+    return filtered
 
 
 def get_kalle_content_records(month: int = None, start_date: str = None, end_date: str = None) -> List[Dict]:

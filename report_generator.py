@@ -1,5 +1,9 @@
-# report_generator.py - Version 5.8.2
-# Removed: GPT chat feature (use web ChatGPT instead)
+# report_generator.py - Version 5.8.1
+# Fixed: Added ALL missing functions required by main.py
+# - generate_content_calendar_text
+# - generate_task_summary_text
+# - generate_general_summary_text
+# - chat_with_gpt
 
 import os
 import logging
@@ -7,6 +11,9 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# OpenAI config
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # ============================================================================
 # FORMATTING UTILITIES
@@ -59,6 +66,42 @@ def format_content_breakdown(content_data: Dict[str, int]) -> str:
         return f"{items[0]} và {items[1]}"
     else:
         return ", ".join(items[:-1]) + f" và {items[-1]}"
+
+
+# ============================================================================
+# CHAT WITH GPT - REQUIRED BY main.py
+# ============================================================================
+
+async def chat_with_gpt(question: str) -> str:
+    """
+    Chat with OpenAI GPT
+    Required by main.py for INTENT_GPT_CHAT
+    """
+    if not OPENAI_API_KEY:
+        return "❌ OpenAI API key chưa được cấu hình. Vui lòng thêm OPENAI_API_KEY vào environment variables."
+    
+    try:
+        import openai
+        
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Bạn là trợ lý AI hữu ích, trả lời bằng tiếng Việt."},
+                {"role": "user", "content": question}
+            ],
+            max_tokens=1000,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content
+        
+    except ImportError:
+        return "❌ Thư viện OpenAI chưa được cài đặt. Vui lòng chạy: pip install openai"
+    except Exception as e:
+        logger.error(f"GPT error: {e}")
+        return f"❌ Lỗi khi gọi GPT: {str(e)}"
 
 
 # ============================================================================
@@ -141,18 +184,41 @@ async def generate_dashboard_report_text(
         
         if staff_list:
             staff = staff_list[0]
-            content_text = staff.get("content_breakdown_text", "")
-            if not content_text:
-                content_data = staff.get("content_breakdown", {})
-                if content_data:
-                    content_text = format_content_breakdown(content_data)
+            
+            # Get content breakdown
+            content_data = staff.get("content_breakdown", {})
+            content_text = ""
+            if content_data:
+                content_parts = []
+                for key, count in content_data.items():
+                    if count > 0 and key not in ["total", "total_cart", "total_text"]:
+                        content_parts.append(f"{count} {key}")
+                if content_parts:
+                    content_text = " và ".join(content_parts[:5])  # Limit to 5 items
+            
+            # Calculate progress and status
+            video_percent = staff.get('video_percent', 0)
+            budget_percent = staff.get('budget_percent', 0)
+            avg_percent = (video_percent + budget_percent) / 2 if (video_percent + budget_percent) > 0 else 0
+            
+            # Determine status
+            if avg_percent >= 100:
+                status = "🟢 Đạt"
+            elif avg_percent >= 80:
+                status = "🟢 Gần đạt"
+            elif avg_percent >= 50:
+                status = "🟡 Đang tiến hành"
+            else:
+                status = "🔴 Cần cố gắng"
             
             lines = [
                 f"🧴 **KPI CÁ NHÂN - {brand}**",
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 f"📅 Tháng {month}",
+                "",
                 f"👤 **{staff.get('name')} - PR Booking {brand}**",
                 "───────────────────────────",
+                f"📊 **Trạng thái:** {status}",
                 "",
                 "📦 **SỐ LƯỢNG VIDEO:**",
                 f"   • KPI: {staff.get('video_kpi', 0)} video",
@@ -160,6 +226,7 @@ async def generate_dashboard_report_text(
                 f"   • Tỷ lệ: **{staff.get('video_percent', 0)}%**",
             ]
             
+            # Add content breakdown if available
             if content_text:
                 lines.append(f"   **Content: {content_text}**")
             
@@ -170,9 +237,20 @@ async def generate_dashboard_report_text(
                 f"   • Đã air: {format_number_vn(staff.get('budget_done', 0))}",
                 f"   • Tỷ lệ: **{staff.get('budget_percent', 0)}%**",
                 "",
-                f"📊 **Trạng thái:** {staff.get('status', '')}",
-                f"📊 Tiến độ: {generate_progress_bar(staff.get('progress', 0))} {staff.get('progress', 0)}%",
+                f"📊 Tiến độ: {generate_progress_bar(avg_percent)} {avg_percent:.1f}%",
             ])
+            
+            # Add contact info if available
+            contact_total = staff.get('contact_total', 0)
+            contact_deal = staff.get('contact_deal', 0)
+            if contact_total > 0:
+                deal_percent = (contact_deal / contact_total * 100) if contact_total > 0 else 0
+                lines.extend([
+                    "",
+                    "📞 **LIÊN HỆ KOC:**",
+                    f"   • Tổng liên hệ: {contact_total}",
+                    f"   • Đã deal: {contact_deal} ({deal_percent:.1f}%)",
+                ])
             
             return "\n".join(lines)
         else:
