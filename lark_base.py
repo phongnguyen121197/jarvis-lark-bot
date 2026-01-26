@@ -105,12 +105,6 @@ def get_bitable_records(
     page_token: str = None
 ) -> Tuple[List[Dict], str]:
     """Fetch records from Lark Bitable"""
-    
-    # Validate inputs - this is the root cause of most errors
-    if not base_id or not table_id:
-        logger.error(f"❌ Missing Bitable config: base_id='{base_id}', table_id='{table_id}'")
-        return [], ""
-    
     url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{base_id}/tables/{table_id}/records"
     
     params = {"page_size": page_size}
@@ -120,52 +114,18 @@ def get_bitable_records(
         params["page_token"] = page_token
     
     try:
-        headers = get_headers()
-        token = headers.get("Authorization", "")
-        if not token or token == "Bearer " or token == "Bearer None":
-            logger.error(f"❌ No valid Lark token available")
-            return [], ""
-        
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        
-        # Check HTTP status first
-        if response.status_code != 200:
-            logger.error(f"❌ Bitable HTTP {response.status_code}: {response.text[:200]}")
-            return [], ""
-        
-        # Check if response is HTML (common error when config is wrong)
-        content_type = response.headers.get("Content-Type", "")
-        if "html" in content_type.lower():
-            logger.error(f"❌ Bitable returned HTML instead of JSON. Check your BASE_ID and TABLE_ID config.")
-            return [], ""
-        
-        # Try to parse JSON safely
-        try:
-            data = response.json()
-        except Exception as json_err:
-            logger.error(f"❌ JSON parse error: {json_err}")
-            logger.error(f"   Response (first 200 chars): {response.text[:200]}")
-            return [], ""
+        response = requests.get(url, headers=get_headers(), params=params, timeout=30)
+        data = response.json()
         
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
             next_token = data.get("data", {}).get("page_token", "")
-            logger.debug(f"✅ Fetched {len(items)} records from table {table_id}")
             return items, next_token
         else:
-            error_code = data.get("code", "N/A")
-            error_msg = data.get("msg", "Unknown error")
-            logger.error(f"❌ Bitable API error [{error_code}]: {error_msg}")
+            logger.error(f"Bitable fetch error: {data}")
             return [], ""
-            
-    except requests.exceptions.Timeout:
-        logger.error(f"❌ Bitable request timeout for table {table_id}")
-        return [], ""
-    except requests.exceptions.RequestException as req_err:
-        logger.error(f"❌ Bitable connection error: {req_err}")
-        return [], ""
     except Exception as e:
-        logger.error(f"❌ Bitable unexpected error: {e}")
+        logger.error(f"Bitable request error: {e}")
         return [], ""
 
 
@@ -321,37 +281,26 @@ def get_notes_due_soon(hours: int = 24) -> List[Dict]:
 
 def get_kalle_booking_records(month: int = None, year: int = None) -> List[Dict]:
     """Get KALLE booking records"""
-    if not KALLE_BASE_ID or not KALLE_TABLE_BOOKING:
-        logger.error(f"❌ KALLE BOOKING config missing: BASE_ID='{KALLE_BASE_ID}', TABLE_BOOKING='{KALLE_TABLE_BOOKING}'")
-        return []
-    
     filter_formula = None
     
     if month and year:
-        month_str = f"Tháng {month}"
+        # Format month as "01", "02", etc. to match Bitable data
+        month_str = f"{month:02d}"
         filter_formula = f'CurrentValue.[Tháng air]="{month_str}"'
     
-    logger.info(f"📊 Fetching KALLE booking records for month={month}, year={year}")
-    records = get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_BOOKING, filter_formula)
-    logger.info(f"📊 Got {len(records)} KALLE booking records")
-    return records
+    return get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_BOOKING, filter_formula)
 
 
 def get_kalle_dashboard_records(month: int = None) -> List[Dict]:
     """Get KALLE dashboard KPI records"""
-    if not KALLE_BASE_ID or not KALLE_TABLE_DASHBOARD:
-        logger.error(f"❌ KALLE DASHBOARD config missing: BASE_ID='{KALLE_BASE_ID}', TABLE_DASHBOARD='{KALLE_TABLE_DASHBOARD}'")
-        return []
-    
     filter_formula = None
     
     if month:
-        filter_formula = f'CurrentValue.[Tháng]="{month}"'
+        # Format month as "01", "02", etc. to match Bitable data
+        month_str = f"{month:02d}"
+        filter_formula = f'CurrentValue.[Tháng báo cáo]="{month_str}"'
     
-    logger.info(f"📊 Fetching KALLE dashboard records for month={month}")
-    records = get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_DASHBOARD, filter_formula)
-    logger.info(f"📊 Got {len(records)} KALLE dashboard records")
-    return records
+    return get_all_bitable_records(KALLE_BASE_ID, KALLE_TABLE_DASHBOARD, filter_formula)
 
 
 def get_kalle_content_records(month: int = None, start_date: str = None, end_date: str = None) -> List[Dict]:
@@ -388,18 +337,10 @@ def get_kalle_task_records(month: int = None, vi_tri: str = None) -> List[Dict]:
 
 def get_cheng_dashboard_records(month: int = None) -> List[Dict]:
     """Get CHENG dashboard records"""
-    if not CHENG_BASE_ID or not CHENG_TABLE_DASHBOARD:
-        logger.error(f"❌ CHENG DASHBOARD config missing: BASE_ID='{CHENG_BASE_ID}', TABLE_DASHBOARD='{CHENG_TABLE_DASHBOARD}'")
-        return []
-    
     filter_formula = None
     if month:
         filter_formula = f'CurrentValue.[Tháng]="{month}"'
-    
-    logger.info(f"📊 Fetching CHENG dashboard records for month={month}")
-    records = get_all_bitable_records(CHENG_BASE_ID, CHENG_TABLE_DASHBOARD, filter_formula)
-    logger.info(f"📊 Got {len(records)} CHENG dashboard records")
-    return records
+    return get_all_bitable_records(CHENG_BASE_ID, CHENG_TABLE_DASHBOARD, filter_formula)
 
 
 def get_cheng_lien_he_records(week: int = None, month: int = None) -> List[Dict]:
@@ -694,16 +635,17 @@ async def generate_koc_summary(
     staff_kpi = {}
     for record in dashboard_records:
         fields = record.get("fields", {})
-        nhan_su = fields.get("Nhân sự", "")
+        # Try multiple possible field names for staff
+        nhan_su = fields.get("Nhân sự book", "") or fields.get("Nhân sự", "")
         if isinstance(nhan_su, list):
             nhan_su = nhan_su[0].get("text", "") if nhan_su else ""
         
         if nhan_su:
             staff_kpi[nhan_su] = {
-                "video_kpi": fields.get("KPI video", 0) or 0,
-                "budget_kpi": fields.get("KPI ngân sách", 0) or 0,
+                "video_kpi": fields.get("KPI Số lượng", 0) or fields.get("KPI số lượng tổ...", 0) or fields.get("KPI video", 0) or 0,
+                "budget_kpi": fields.get("KPI ngân sách", 0) or fields.get("Ngân sách tổng...", 0) or 0,
                 "contact_total": fields.get("Tổng liên hệ", 0) or 0,
-                "contact_deal": fields.get("Đã deal", 0) or 0
+                "contact_deal": fields.get("Đã deal", 0) or fields.get("# Đã deal", 0) or 0
             }
     
     # Aggregate by staff from bookings
