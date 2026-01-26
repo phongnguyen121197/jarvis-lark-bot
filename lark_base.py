@@ -664,21 +664,27 @@ async def generate_koc_summary(
     product_filter: str = None
 ) -> Dict[str, Any]:
     """Generate KOC summary for KALLE"""
+    logger.info(f"🚀 generate_koc_summary called: month={month}, week={week}")
+    
     if month is None:
         month = datetime.now().month
     
     year = datetime.now().year
     
+    logger.info(f"📅 Fetching KALLE data for month={month}, year={year}")
+    
     # Fetch data
     booking_records = get_kalle_booking_records(month, year)
+    logger.info(f"📊 Booking records: {len(booking_records)}")
+    
     dashboard_records = get_kalle_dashboard_records(month)
+    logger.info(f"📊 Dashboard records: {len(dashboard_records)}")
     
     # Aggregate content
     content_by_nhan_su = aggregate_content_by_staff(booking_records)
     
     # Build staff KPI lookup
     staff_kpi = {}
-    logger.info(f"📊 Dashboard records count: {len(dashboard_records)}")
     
     for record in dashboard_records:
         fields = record.get("fields", {})
