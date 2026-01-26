@@ -827,8 +827,17 @@ async def generate_dashboard_summary(
     week: int = None
 ) -> Dict[str, Any]:
     """Generate KALLE dashboard summary for all staff"""
-    # Reuse generate_koc_summary logic
-    return await generate_koc_summary(month=month, week=week)
+    logger.info(f"🎯 generate_dashboard_summary called: month={month}, week={week}")
+    try:
+        # Reuse generate_koc_summary logic
+        result = await generate_koc_summary(month=month, week=week)
+        logger.info(f"✅ generate_dashboard_summary success: {len(result.get('staff_list', []))} staff")
+        return result
+    except Exception as e:
+        logger.error(f"❌ generate_dashboard_summary error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 # ============================================================================
 # CHENG SUMMARY GENERATION
