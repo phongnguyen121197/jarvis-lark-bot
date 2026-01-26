@@ -1,9 +1,10 @@
 """
-Report Generator Module - Version 5.7.2
+Report Generator Module - Version 5.7.14
+Updated: KPI format với chi tiết Content breakdown
 """
 import os
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from openai import AsyncOpenAI
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -118,7 +119,46 @@ async def chat_with_gpt(question: str) -> str:
     except Exception as e:
         return f"❌ Lỗi: {str(e)}"
 
+
+def format_content_breakdown(content_details: List[Dict]) -> str:
+    """
+    Format chi tiết content breakdown
+    Input: List of {san_pham: "Nước hoa", loai: "Cart", so_luong: 30}
+    Output: "30 cart Nước hoa, Dark Beauty 30ml và 10 cart Text, Dark Beauty 30ml"
+    """
+    if not content_details:
+        return ""
+    
+    # Group by loại (Cart, Text, Video, etc.)
+    grouped = {}
+    for item in content_details:
+        san_pham = item.get("san_pham", "N/A")
+        loai = item.get("loai", "Video")
+        so_luong = item.get("so_luong", 0)
+        
+        key = f"{loai}"
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append({"san_pham": san_pham, "so_luong": so_luong})
+    
+    # Format output
+    parts = []
+    for loai, items in grouped.items():
+        for item in items:
+            parts.append(f"{item['so_luong']} {loai.lower()} {item['san_pham']}")
+    
+    if len(parts) > 1:
+        return ", ".join(parts[:-1]) + " và " + parts[-1]
+    elif parts:
+        return parts[0]
+    return ""
+
+
 async def generate_dashboard_report_text(data: dict, report_type: str = "full", nhan_su_filter: str = None) -> str:
+    """
+    Generate KALLE dashboard report
+    Updated v5.7.14: Added content breakdown details
+    """
     from datetime import datetime
     
     month = data.get("month")
@@ -127,6 +167,7 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
     kpi_nhan_su = data.get("kpi_nhan_su", {})
     top_koc = data.get("top_koc", [])
     lien_he_nhan_su = data.get("lien_he_nhan_su", {})
+    content_by_nhan_su = data.get("content_by_nhan_su", {})  # NEW: chi tiết content
     
     current_day = datetime.now().day
     current_month = datetime.now().month
@@ -139,12 +180,17 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
     
     lines = []
     
+    # ===== KPI CÁ NHÂN - KALLE (Updated format v5.7.14) =====
     if report_type == "kpi_ca_nhan" and nhan_su_filter:
-        lines.append(f"👤 **KPI CÁ NHÂN - {time_label.upper()}**\n")
+        lines.append("🧴 **KPI CÁ NHÂN - Kalle**")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"📅 {time_label}")
+        lines.append("")
         
         matched_ns = None
         matched_kpi = None
         matched_lh = None
+        matched_content = None
         
         for ns, kpi in kpi_nhan_su.items():
             if nhan_su_filter.lower() in ns.lower() or ns.lower() in nhan_su_filter.lower():
@@ -157,6 +203,12 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
                 matched_lh = lh
                 break
         
+        # Get content details if available
+        for ns, content in content_by_nhan_su.items():
+            if nhan_su_filter.lower() in ns.lower() or ns.lower() in nhan_su_filter.lower():
+                matched_content = content
+                break
+        
         if not matched_ns:
             lines.append(f"❌ Không tìm thấy nhân sự: {nhan_su_filter}")
             lines.append("\n📋 Danh sách nhân sự có sẵn:")
@@ -165,27 +217,67 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
                     lines.append(f"  • {ns}")
             return "\n".join(lines)
         
-        lines.append(f"═══════════════════════════")
-        lines.append(f"📊 **{matched_ns}**")
-        lines.append(f"═══════════════════════════\n")
+        # Get short name for display
+        short_name = matched_ns.split(" - ")[0] if " - " in matched_ns else matched_ns
+        
+        lines.append(f"👤 **{short_name} - PR Booking Kalle**")
+        lines.append("───────────────────────────")
         
         if matched_kpi:
             pct_sl = matched_kpi.get("pct_kpi_so_luong", 0)
             sl_air = matched_kpi.get("so_luong_air", 0)
             kpi_sl = matched_kpi.get("kpi_so_luong", 0)
             
-            if pct_sl >= 50:
-                status = "🟢 Đang trên tiến độ"
-            elif pct_sl >= 20:
-                status = "🟡 Cần cố gắng thêm"
-            else:
-                status = "🔴 Dưới tiến độ"
+            ns_air = matched_kpi.get("ngan_sach_air", 0)
+            kpi_ns = matched_kpi.get("kpi_ngan_sach", 0)
+            pct_ns = matched_kpi.get("pct_kpi_ngan_sach", 0)
             
-            lines.append(f"**Trạng thái:** {status}\n")
-            lines.append(f"📦 **KPI Số lượng:** {sl_air}/{kpi_sl} ({pct_sl}%)")
+            # Status emoji
+            if pct_sl >= 100:
+                status = "🏆 Đã đạt KPI!"
+            elif pct_sl >= 70:
+                status = "🟢 Gần đạt"
+            elif pct_sl >= 50:
+                status = "🟡 Đang tiến triển"
+            else:
+                status = "🔴 Cần cố gắng"
+            
+            lines.append(f"📊 **Trạng thái:** {status}")
+            lines.append("")
+            lines.append("📦 **SỐ LƯỢNG VIDEO:**")
+            lines.append(f"   • KPI: {kpi_sl} video")
+            lines.append(f"   • Đã air: {sl_air} video")
+            lines.append(f"   • Tỷ lệ: **{pct_sl}%**")
+            
+            # ===== NEW v5.7.14: Content breakdown =====
+            if matched_content:
+                content_text = format_content_breakdown(matched_content)
+                if content_text:
+                    lines.append(f"   **Content:** {content_text}")
+            
+            lines.append("")
+            lines.append("💰 **NGÂN SÁCH:**")
+            lines.append(f"   • KPI: {format_currency(kpi_ns)}")
+            lines.append(f"   • Đã air: {format_currency(ns_air)}")
+            lines.append(f"   • Tỷ lệ: **{pct_ns}%**")
+            
+            # Progress bar
+            progress_filled = int(min(pct_sl, 100) / 10)
+            progress_empty = 10 - progress_filled
+            progress_bar = "▓" * progress_filled + "░" * progress_empty
+            avg_pct = (pct_sl + pct_ns) / 2 if pct_ns > 0 else pct_sl
+            lines.append(f"\n📊 Tiến độ: [{progress_bar}] {avg_pct:.1f}%")
+        
+        # Liên hệ KOC
+        if matched_lh:
+            lines.append("")
+            lines.append("📞 **LIÊN HỆ KOC:**")
+            lines.append(f"   • Tổng liên hệ: {matched_lh.get('tong_lien_he', 0)}")
+            lines.append(f"   • Đã deal: {matched_lh.get('da_deal', 0)} ({matched_lh.get('ty_le_deal', 0)}%)")
         
         return "\n".join(lines)
     
+    # ===== FULL REPORT =====
     lines.append(f"📊 **DASHBOARD {time_label.upper()}**\n")
     
     kpi_sl = tong_quan.get("kpi_so_luong", 0)
@@ -205,7 +297,8 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
                 continue
             pct = kpi.get("pct_kpi_so_luong", 0)
             emoji = "🟢" if pct >= 50 else "🟡" if pct >= 20 else "🔴"
-            lines.append(f"{emoji} {nhan_su}: {pct}%")
+            short_name = nhan_su.split(" - ")[0] if " - " in nhan_su else nhan_su
+            lines.append(f"{emoji} {short_name}: {pct}%")
     
     if top_koc:
         lines.append("\n🏅 **TOP KOC:**")
@@ -216,19 +309,25 @@ async def generate_dashboard_report_text(data: dict, report_type: str = "full", 
     
     return "\n".join(lines)
 
+
 async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: str = "full", nhan_su_filter: str = None) -> str:
+    """
+    Generate CHENG report with KPI details
+    Updated v5.7.14: Added content breakdown details
+    """
     from datetime import datetime
     
     tong_quan = summary_data.get("tong_quan", {})
     kpi_nhan_su = summary_data.get("kpi_nhan_su", {})
     lien_he_nhan_su = summary_data.get("lien_he_nhan_su", {})
     top_koc = summary_data.get("top_koc", [])
+    content_by_nhan_su = summary_data.get("content_by_nhan_su", {})  # NEW
     month = summary_data.get("month")
     week = summary_data.get("week")
     
     lines = []
     
-    # KPI CÁ NHÂN cho CHENG
+    # ===== KPI CÁ NHÂN - CHENG (Updated v5.7.14) =====
     if report_type == "kpi_ca_nhan" and nhan_su_filter:
         lines.append("🧴 **KPI CÁ NHÂN - CHENG**")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -237,44 +336,49 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: 
         lines.append(f"📅 Tháng {month}{week_text}")
         lines.append("")
         
-        # IMPROVED MATCHING LOGIC v5.7.3
-        # Priority: 1) Exact prefix match, 2) Word boundary match, 3) Contains match
+        # IMPROVED MATCHING LOGIC
         found_kpi = None
         filter_lower = nhan_su_filter.lower().strip()
         
-        # First pass: Find prefix match (tên bắt đầu bằng filter)
+        # First pass: Find prefix match
         for ns, data in kpi_nhan_su.items():
             ns_lower = ns.lower()
-            # Check if name starts with filter (ignoring "CHENG " prefix)
             ns_clean = ns_lower.replace("cheng ", "").strip()
             if ns_clean.startswith(filter_lower):
                 found_kpi = (ns, data)
                 break
         
-        # Second pass: Find word boundary match
+        # Second pass: Word boundary match
         if not found_kpi:
             import re
             for ns, data in kpi_nhan_su.items():
                 ns_lower = ns.lower()
-                # Match as a complete word
                 if re.search(rf'\b{re.escape(filter_lower)}\b', ns_lower):
                     found_kpi = (ns, data)
                     break
         
-        # Third pass: Contains match (fallback)
+        # Third pass: Contains match
         if not found_kpi:
             for ns, data in kpi_nhan_su.items():
                 if filter_lower in ns.lower():
                     found_kpi = (ns, data)
                     break
         
-        # Find liên hệ data (same logic)
+        # Find liên hệ data
         found_lh = None
         for ns, data in lien_he_nhan_su.items():
             ns_lower = ns.lower()
             ns_clean = ns_lower.replace("cheng ", "").strip()
             if ns_clean.startswith(filter_lower) or filter_lower in ns_lower:
                 found_lh = (ns, data)
+                break
+        
+        # Find content details
+        found_content = None
+        for ns, content in content_by_nhan_su.items():
+            ns_lower = ns.lower()
+            if filter_lower in ns_lower:
+                found_content = content
                 break
         
         if not found_kpi and not found_lh:
@@ -311,13 +415,20 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: 
             lines.append(f"   • KPI: {kpi_sl} video")
             lines.append(f"   • Đã air: {sl_air} video")
             lines.append(f"   • Tỷ lệ: **{pct_sl}%**")
+            
+            # ===== NEW v5.7.14: Content breakdown =====
+            if found_content:
+                content_text = format_content_breakdown(found_content)
+                if content_text:
+                    lines.append(f"   **Content:** {content_text}")
+            
             lines.append("")
             lines.append("💰 **NGÂN SÁCH:**")
             lines.append(f"   • KPI: {format_currency(kpi_ns)}")
             lines.append(f"   • Đã air: {format_currency(ns_air)}")
             lines.append(f"   • Tỷ lệ: **{pct_ns}%**")
             
-            progress_filled = int(pct_sl / 10)
+            progress_filled = int(min(pct_sl, 100) / 10)
             progress_empty = 10 - progress_filled
             progress_bar = "▓" * progress_filled + "░" * progress_empty
             lines.append(f"\n📊 Tiến độ: [{progress_bar}] {pct_sl}%")
@@ -331,7 +442,7 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: 
         
         return "\n".join(lines)
     
-    # FULL REPORT
+    # ===== FULL REPORT =====
     lines.append("🧴 **BÁO CÁO KOC - CHENG LOVE HAIR**")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     
@@ -352,7 +463,7 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: 
     if total_gmv > 0:
         lines.append(f"📈 **GMV KOC:** {format_currency(total_gmv)}")
     
-    progress_filled = int(pct_sl / 10)
+    progress_filled = int(min(pct_sl, 100) / 10)
     progress_empty = 10 - progress_filled
     progress_bar = "▓" * progress_filled + "░" * progress_empty
     lines.append(f"📊 [{progress_bar}] {pct_sl}%")
@@ -399,7 +510,69 @@ async def generate_cheng_report_text(summary_data: Dict[str, Any], report_type: 
         lines.append("")
     
     lines.append("───────────────────────────")
-    lines.append("🧴 **Cheng Love Hair** | Jarvis v5.7.2")
+    lines.append("🧴 **Cheng Love Hair** | Jarvis v5.7.14")
     lines.append("💡 Tip: Hỏi \"KPI của Phương\" để xem chi tiết")
+    
+    return "\n".join(lines)
+
+
+async def generate_content_stats_text(content_data: Dict[str, Any], nhan_su_filter: str = None) -> str:
+    """
+    NEW v5.7.14: Generate content statistics report
+    Shows breakdown by product type for specific staff or all staff
+    """
+    month = content_data.get("month")
+    content_by_nhan_su = content_data.get("content_by_nhan_su", {})
+    content_summary = content_data.get("content_summary", {})
+    
+    lines = []
+    lines.append("📊 **THỐNG KÊ NỘI DUNG BOOKING**")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"📅 Tháng {month}")
+    lines.append("")
+    
+    if nhan_su_filter:
+        # Chi tiết cho 1 nhân sự
+        filter_lower = nhan_su_filter.lower()
+        matched = None
+        
+        for ns, content in content_by_nhan_su.items():
+            if filter_lower in ns.lower():
+                matched = (ns, content)
+                break
+        
+        if not matched:
+            lines.append(f"❌ Không tìm thấy nhân sự: {nhan_su_filter}")
+            return "\n".join(lines)
+        
+        ns, content_list = matched
+        lines.append(f"👤 **{ns}**")
+        lines.append("───────────────────────────")
+        
+        # Group by san_pham
+        by_product = {}
+        for item in content_list:
+            sp = item.get("san_pham", "N/A")
+            loai = item.get("loai", "Video")
+            sl = item.get("so_luong", 0)
+            
+            if sp not in by_product:
+                by_product[sp] = {}
+            if loai not in by_product[sp]:
+                by_product[sp][loai] = 0
+            by_product[sp][loai] += sl
+        
+        for sp, types in by_product.items():
+            lines.append(f"\n📦 **{sp}:**")
+            for loai, sl in types.items():
+                lines.append(f"   • {loai}: {sl} video")
+    
+    else:
+        # Tổng quan tất cả
+        lines.append("📦 **THEO SẢN PHẨM:**")
+        
+        for sp, data in content_summary.items():
+            total = data.get("total", 0)
+            lines.append(f"• {sp}: {total} video")
     
     return "\n".join(lines)
