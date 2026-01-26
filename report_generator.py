@@ -1,9 +1,5 @@
-# report_generator.py - Version 5.8.1
-# Fixed: Added ALL missing functions required by main.py
-# - generate_content_calendar_text
-# - generate_task_summary_text
-# - generate_general_summary_text
-# - chat_with_gpt
+# report_generator.py - Version 5.8.2
+# Removed: GPT chat feature (use web ChatGPT instead)
 
 import os
 import logging
@@ -11,9 +7,6 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-# OpenAI config
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # ============================================================================
 # FORMATTING UTILITIES
@@ -66,42 +59,6 @@ def format_content_breakdown(content_data: Dict[str, int]) -> str:
         return f"{items[0]} và {items[1]}"
     else:
         return ", ".join(items[:-1]) + f" và {items[-1]}"
-
-
-# ============================================================================
-# CHAT WITH GPT - REQUIRED BY main.py
-# ============================================================================
-
-async def chat_with_gpt(question: str) -> str:
-    """
-    Chat with OpenAI GPT
-    Required by main.py for INTENT_GPT_CHAT
-    """
-    if not OPENAI_API_KEY:
-        return "❌ OpenAI API key chưa được cấu hình. Vui lòng thêm OPENAI_API_KEY vào environment variables."
-    
-    try:
-        import openai
-        
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Bạn là trợ lý AI hữu ích, trả lời bằng tiếng Việt."},
-                {"role": "user", "content": question}
-            ],
-            max_tokens=1000,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content
-        
-    except ImportError:
-        return "❌ Thư viện OpenAI chưa được cài đặt. Vui lòng chạy: pip install openai"
-    except Exception as e:
-        logger.error(f"GPT error: {e}")
-        return f"❌ Lỗi khi gọi GPT: {str(e)}"
 
 
 # ============================================================================

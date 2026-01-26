@@ -34,9 +34,9 @@ from apscheduler.triggers.cron import CronTrigger
 load_dotenv()
 
 # Import modules
-from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CHENG_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_GPT_CHAT, INTENT_DASHBOARD, INTENT_UNKNOWN
+from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CHENG_REPORT, INTENT_CONTENT_CALENDAR, INTENT_TASK_SUMMARY, INTENT_GENERAL_SUMMARY, INTENT_DASHBOARD, INTENT_UNKNOWN
 from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, generate_dashboard_summary, test_connection
-from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, generate_cheng_report_text, chat_with_gpt
+from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, generate_cheng_report_text
 from notes_manager import check_note_command, handle_note_command, get_notes_manager
 
 # ============ SCHEDULER CONFIG ============
@@ -481,13 +481,6 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
             dashboard_data = await generate_dashboard_summary(month=month, week=week)
             report = await generate_dashboard_report_text(dashboard_data, report_type=report_type, nhan_su_filter=nhan_su)
             return report
-        
-        elif intent == INTENT_GPT_CHAT:
-            question = intent_result.get("question", "")
-            if not question:
-                return "❓ Bạn muốn hỏi gì? Hãy thử: \"GPT: câu hỏi của bạn\""
-            response = await chat_with_gpt(question)
-            return f"🤖 GPT trả lời:\n\n{response}"
         
         else:
             return intent_result.get("suggestion", 
