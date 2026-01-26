@@ -633,20 +633,50 @@ async def generate_koc_summary(
     
     # Build staff KPI lookup
     staff_kpi = {}
+    logger.info(f"📊 Dashboard records count: {len(dashboard_records)}")
+    
     for record in dashboard_records:
         fields = record.get("fields", {})
         # Try multiple possible field names for staff
-        nhan_su = fields.get("Nhân sự book", "") or fields.get("Nhân sự", "")
-        if isinstance(nhan_su, list):
-            nhan_su = nhan_su[0].get("text", "") if nhan_su else ""
+        nhan_su_raw = fields.get("Nhân sự book", "") or fields.get("Nhân sự", "")
+        
+        # Handle different field types
+        nhan_su = ""
+        if isinstance(nhan_su_raw, list):
+            # Link field or multi-select
+            if nhan_su_raw:
+                first_item = nhan_su_raw[0]
+                if isinstance(first_item, dict):
+                    nhan_su = first_item.get("text", "") or first_item.get("name", "") or str(first_item)
+                else:
+                    nhan_su = str(first_item)
+        elif isinstance(nhan_su_raw, dict):
+            nhan_su = nhan_su_raw.get("text", "") or nhan_su_raw.get("name", "") or str(nhan_su_raw)
+        else:
+            nhan_su = str(nhan_su_raw) if nhan_su_raw else ""
         
         if nhan_su:
-            staff_kpi[nhan_su] = {
-                "video_kpi": fields.get("KPI Số lượng", 0) or fields.get("KPI số lượng tổ...", 0) or fields.get("KPI video", 0) or 0,
-                "budget_kpi": fields.get("KPI ngân sách", 0) or fields.get("Ngân sách tổng...", 0) or 0,
-                "contact_total": fields.get("Tổng liên hệ", 0) or 0,
-                "contact_deal": fields.get("Đã deal", 0) or fields.get("# Đã deal", 0) or 0
-            }
+            # Get product for this record
+            san_pham = fields.get("Sản phẩm", "")
+            if isinstance(san_pham, list) and san_pham:
+                san_pham = san_pham[0].get("text", "") if isinstance(san_pham[0], dict) else str(san_pham[0])
+            
+            # Aggregate KPI by staff (sum across all products)
+            if nhan_su not in staff_kpi:
+                staff_kpi[nhan_su] = {
+                    "video_kpi": 0,
+                    "budget_kpi": 0,
+                    "contact_total": 0,
+                    "contact_deal": 0
+                }
+            
+            # Add KPI values (they might be per product row)
+            staff_kpi[nhan_su]["video_kpi"] += fields.get("KPI Số lư...", 0) or fields.get("KPI Số lượng", 0) or fields.get("KPI số lượng tổ...", 0) or 0
+            staff_kpi[nhan_su]["budget_kpi"] += fields.get("KPI ngân sách", 0) or fields.get("Ngân sách tổng...", 0) or 0
+            staff_kpi[nhan_su]["contact_total"] += fields.get("Tổng liên hệ", 0) or 0
+            staff_kpi[nhan_su]["contact_deal"] += fields.get("Đã deal", 0) or fields.get("# Đã deal", 0) or 0
+    
+    logger.info(f"📊 Staff KPI lookup: {list(staff_kpi.keys())}")
     
     # Aggregate by staff from bookings
     staff_stats = defaultdict(lambda: {"video_done": 0, "budget_done": 0})
