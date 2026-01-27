@@ -66,7 +66,10 @@ DASHBOARD_KEYWORDS = [
     # Trigger mới
     "cập nhật tình hình", "cap nhat tinh hinh",
     "tình hình booking", "tinh hinh booking",
-    "cập nhật booking", "cap nhat booking"
+    "cập nhật booking", "cap nhat booking",
+    # v5.7.19: Team booking keywords
+    "team booking", "tình hình team", "tinh hinh team",
+    "báo cáo team", "bao cao team", "booking tháng"
 ]
 
 # ============ NHÂN SỰ MAPPING ============
@@ -419,8 +422,12 @@ def classify_intent(text: str) -> Dict[str, Any]:
         # Xác định loại báo cáo dashboard
         report_type = "full"  # Mặc định: báo cáo đầy đủ
         
+        # v5.7.19: Team booking report
+        if "team" in text_lower or ("booking" in text_lower and "tháng" in text_lower) or ("booking" in text_lower and "thang" in text_lower):
+            if not kalle_nhan_su_detected:  # Không có nhân sự cụ thể → báo cáo team
+                report_type = "kpi_team"
         # Nếu có nhân sự cụ thể -> báo cáo cá nhân
-        if kalle_nhan_su_detected:
+        elif kalle_nhan_su_detected:
             report_type = "kpi_ca_nhan"
         elif "top koc" in text_lower or "doanh số" in text_lower or "doanh so" in text_lower or "gmv" in text_lower:
             report_type = "top_koc"

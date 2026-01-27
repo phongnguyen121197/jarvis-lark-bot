@@ -256,6 +256,114 @@ async def generate_dashboard_report_text(
         else:
             return f"❌ Không tìm thấy nhân sự: {nhan_su_filter}"
     
+    # v5.7.19: Team booking report - tổng hợp toàn bộ team
+    if report_type == "kpi_team":
+        # Tổng hợp từ totals (Dashboard Tháng)
+        total_video_kpi = totals.get("video_kpi", 0)
+        total_video_done = totals.get("video_done", 0)
+        total_video_percent = totals.get("video_percent", 0)
+        total_budget_kpi = totals.get("budget_kpi", 0)
+        total_budget_done = totals.get("budget_done", 0)
+        total_budget_percent = totals.get("budget_percent", 0)
+        
+        # Aggregate content breakdown từ tất cả nhân sự (từ Booking)
+        team_content = {}
+        for staff in staff_list:
+            content_data = staff.get("content_breakdown", {})
+            for key, count in content_data.items():
+                if key not in ["total", "total_cart", "total_text"] and count > 0:
+                    if key in team_content:
+                        team_content[key] += count
+                    else:
+                        team_content[key] = count
+        
+        # Format content text
+        content_text = ""
+        if team_content:
+            sorted_content = sorted(team_content.items(), key=lambda x: x[1], reverse=True)
+            content_parts = [f"{count} {key}" for key, count in sorted_content[:5]]
+            if len(content_parts) <= 2:
+                content_text = " và ".join(content_parts)
+            else:
+                content_text = ", ".join(content_parts[:2]) + f" và {len(content_parts) - 2} loại khác"
+        
+        # Calculate status
+        avg_percent = (total_video_percent + total_budget_percent) / 2 if (total_video_percent + total_budget_percent) > 0 else 0
+        if avg_percent >= 100:
+            status = "🟢 Đạt"
+        elif avg_percent >= 80:
+            status = "🟢 Gần đạt"
+        elif avg_percent >= 50:
+            status = "🟡 Đang tiến hành"
+        else:
+            status = "🔴 Cần cố gắng"
+        
+        # Aggregate contact info
+        total_contact = sum(s.get("contact_total", 0) for s in staff_list)
+        total_deal = sum(s.get("contact_deal", 0) for s in staff_list)
+        deal_percent = round(total_deal / total_contact * 100, 1) if total_contact > 0 else 0
+        
+        lines = [
+            f"🧴 **BÁO CÁO TEAM BOOKING - {brand}**",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📅 Tháng {month}",
+            "",
+            f"👥 **TEAM PR Booking {brand}** ({len(staff_list)} nhân sự)",
+            "───────────────────────────",
+            f"📊 **Trạng thái:** {status}",
+            "",
+            "📦 **SỐ LƯỢNG VIDEO:**",
+            f"   • KPI: {total_video_kpi} video",
+            f"   • Đã air: {total_video_done} video",
+            f"   • Tỷ lệ: **{total_video_percent}%**",
+        ]
+        
+        if content_text:
+            lines.append(f"   **Content: {content_text}**")
+        
+        lines.extend([
+            "",
+            "💰 **NGÂN SÁCH:**",
+            f"   • KPI: {format_number_vn(total_budget_kpi)}",
+            f"   • Đã air: {format_number_vn(total_budget_done)}",
+            f"   • Tỷ lệ: **{total_budget_percent}%**",
+            "",
+            f"📊 Tiến độ: {generate_progress_bar(avg_percent)} {avg_percent:.1f}%",
+        ])
+        
+        if total_contact > 0:
+            lines.extend([
+                "",
+                "📞 **LIÊN HỆ KOC:**",
+                f"   • Tổng liên hệ: {total_contact}",
+                f"   • Đã deal: {total_deal} ({deal_percent}%)",
+            ])
+        
+        # Chi tiết từng nhân sự
+        lines.extend([
+            "",
+            "───────────────────────────",
+            "👤 **CHI TIẾT TỪNG NHÂN SỰ:**",
+        ])
+        
+        for staff in staff_list:
+            name = staff.get("name", "Unknown")
+            video_done = staff.get("video_done", 0)
+            video_kpi = staff.get("video_kpi", 0)
+            video_percent = staff.get("video_percent", 0)
+            
+            # Status icon
+            if video_percent >= 100:
+                icon = "🟢"
+            elif video_percent >= 80:
+                icon = "🟡"
+            else:
+                icon = "🔴"
+            
+            lines.append(f"   {icon} {name}: {video_done}/{video_kpi} ({video_percent}%)")
+        
+        return "\n".join(lines)
+    
     # Full dashboard report
     lines = [
         f"📊 **DASHBOARD {brand} - Tháng {month}**",
