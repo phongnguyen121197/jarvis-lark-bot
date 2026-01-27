@@ -2323,6 +2323,28 @@ async def delete_note(record_id: str) -> Dict:
     return result
 
 
+async def get_notes_due_soon(hours: int = 24) -> List[Dict]:
+    """Lấy các notes sắp đến hạn trong số giờ tới."""
+    now_ts = int(datetime.now().timestamp() * 1000)
+    future_ts = now_ts + int(hours * 3600 * 1000)
+
+    all_notes = await get_all_notes()
+    due_notes = []
+
+    for note in all_notes:
+        deadline = note.get("deadline")
+        if deadline is None:
+            continue
+        try:
+            deadline_ts = int(deadline)
+        except (TypeError, ValueError):
+            continue
+        if now_ts <= deadline_ts <= future_ts:
+            due_notes.append(note)
+
+    return due_notes
+
+
 async def debug_notes_table():
     """Debug: Xem cấu trúc bảng Notes"""
     records = await get_all_records(
