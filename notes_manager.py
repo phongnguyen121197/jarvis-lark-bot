@@ -250,7 +250,7 @@ async def handle_note_command(params: Dict[str, Any], chat_id: str = "", user_na
     action = params.get("action")
     
     if action == "add":
-        return handle_add_note(
+        return await handle_add_note(
             chat_id,
             params.get("note_key", ""),
             params.get("note_value", ""),
@@ -258,20 +258,20 @@ async def handle_note_command(params: Dict[str, Any], chat_id: str = "", user_na
         )
     
     elif action == "view":
-        return handle_view_notes(chat_id)
+        return await handle_view_notes(chat_id)
     
     elif action == "delete":
-        return handle_delete_note(chat_id, params.get("note_id", "0"))
+        return await handle_delete_note(chat_id, params.get("note_id", "0"))
     
     elif action == "done":
-        return handle_done_note(
+        return await handle_done_note(
             chat_id,
             params.get("note_id") or params.get("note_title", ""),
             params.get("identifier_type", "id")
         )
     
     elif action == "update":
-        return handle_update_note(
+        return await handle_update_note(
             chat_id,
             params.get("note_id", "0"),
             params.get("note_key", ""),
@@ -296,14 +296,13 @@ class NotesManager:
     async def get_notes_due_soon(self, days: int = 1) -> List[Note]:
         """Get notes with deadlines within N days"""
         try:
-            all_notes = get_all_notes()
+            all_notes = await get_all_notes()
             due_notes = []
             now = datetime.now()
             future = now + timedelta(days=days)
             
             for record in all_notes:
-                fields = record.get("fields", {})
-                deadline = fields.get("deadline")
+                deadline = record.get("deadline")
                 
                 if deadline:
                     try:
@@ -311,8 +310,8 @@ class NotesManager:
                         if deadline_dt and now <= deadline_dt <= future:
                             note = Note(
                                 id=str(len(due_notes) + 1),
-                                content=fields.get("note_key", "") or fields.get("note_value", ""),
-                                chat_id=fields.get("chat_id", ""),
+                                content=record.get("note_key", "") or record.get("note_value", ""),
+                                chat_id=record.get("chat_id", ""),
                                 deadline=deadline_dt,
                                 reminder_sent=self._reminder_sent.get(record.get("record_id"), False)
                             )
@@ -328,13 +327,12 @@ class NotesManager:
     async def get_overdue_notes(self) -> List[Note]:
         """Get overdue notes"""
         try:
-            all_notes = get_all_notes()
+            all_notes = await get_all_notes()
             overdue_notes = []
             now = datetime.now()
             
             for record in all_notes:
-                fields = record.get("fields", {})
-                deadline = fields.get("deadline")
+                deadline = record.get("deadline")
                 
                 if deadline:
                     try:
@@ -342,8 +340,8 @@ class NotesManager:
                         if deadline_dt and deadline_dt < now:
                             note = Note(
                                 id=str(len(overdue_notes) + 1),
-                                content=fields.get("note_key", "") or fields.get("note_value", ""),
-                                chat_id=fields.get("chat_id", ""),
+                                content=record.get("note_key", "") or record.get("note_value", ""),
+                                chat_id=record.get("chat_id", ""),
                                 deadline=deadline_dt,
                                 reminder_sent=self._reminder_sent.get(record.get("record_id"), False)
                             )
@@ -384,11 +382,12 @@ def get_notes_manager(chat_id: str = None) -> NotesManager:
 # NOTE OPERATIONS
 # ============================================================================
 
-def handle_add_note(chat_id: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
+async def handle_add_note(chat_id: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
     """Add a new note"""
-    record_id = create_note(chat_id, note_key, note_value, deadline)
+    deadline_str = deadline.isoformat() if isinstance(deadline, datetime) else deadline
+    record = await create_note(chat_id, note_key, note_value, deadline_str)
     
-    if record_id:
+    if record and not record.get("error"):
         response = f"✅ Đã thêm ghi chú: **{note_key}**"
         if deadline:
             response += f"\n📅 Hạn nhắc: {deadline.strftime('%d/%m/%Y %H:%M')}"
@@ -397,9 +396,9 @@ def handle_add_note(chat_id: str, note_key: str, note_value: str, deadline: date
         return "❌ Không thể thêm ghi chú. Vui lòng thử lại."
 
 
-def handle_view_notes(chat_id: str) -> str:
+async def handle_view_notes(chat_id: str) -> str:
     """View all notes for a chat"""
-    notes = get_notes_by_chat_id(chat_id)
+    notes = await get_notes_by_chat_id(chat_id)
     
     if not notes:
         return "📝 Bạn chưa có ghi chú nào."
@@ -407,11 +406,9 @@ def handle_view_notes(chat_id: str) -> str:
     lines = ["📝 **GHI CHÚ CỦA BẠN:**", ""]
     
     for i, note in enumerate(notes, 1):
-        fields = note.get("fields", {})
-        
-        note_key = fields.get("note_key", "Không có tiêu đề")
-        note_value = fields.get("note_value", "")
-        deadline = fields.get("deadline")
+        note_key = note.get("note_key", "Không có tiêu đề")
+        note_value = note.get("note_value", "")
+        deadline = note.get("deadline")
         
         deadline_str = ""
         if deadline:
@@ -435,9 +432,9 @@ def handle_view_notes(chat_id: str) -> str:
     return "\n".join(lines)
 
 
-def handle_delete_note(chat_id: str, note_index: str) -> str:
+async def handle_delete_note(chat_id: str, note_index: str) -> str:
     """Delete a note by index"""
-    notes = get_notes_by_chat_id(chat_id)
+    notes = await get_notes_by_chat_id(chat_id)
     
     try:
         index = int(note_index) - 1
@@ -446,9 +443,10 @@ def handle_delete_note(chat_id: str, note_index: str) -> str:
         
         note = notes[index]
         record_id = note.get("record_id")
-        note_key = note.get("fields", {}).get("note_key", "")
+        note_key = note.get("note_key", "")
         
-        if delete_note(record_id):
+        result = await delete_note(record_id)
+        if result and not result.get("error"):
             return f"✅ Đã xóa ghi chú: **{note_key}**"
         else:
             return "❌ Không thể xóa ghi chú. Vui lòng thử lại."
@@ -457,9 +455,9 @@ def handle_delete_note(chat_id: str, note_index: str) -> str:
         return f"❌ Số ghi chú không hợp lệ: {note_index}"
 
 
-def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id") -> str:
+async def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id") -> str:
     """Mark a note as done"""
-    notes = get_notes_by_chat_id(chat_id)
+    notes = await get_notes_by_chat_id(chat_id)
     
     if not notes:
         return "📝 Bạn chưa có ghi chú nào."
@@ -477,8 +475,8 @@ def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id")
         identifier_lower = identifier.lower()
         
         for n in notes:
-            note_key = n.get("fields", {}).get("note_key", "").lower()
-            note_value = n.get("fields", {}).get("note_value", "").lower()
+            note_key = n.get("note_key", "").lower()
+            note_value = n.get("note_value", "").lower()
             
             if identifier_lower in note_key or identifier_lower in note_value:
                 note = n
@@ -488,17 +486,18 @@ def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id")
             return f"❌ Không tìm thấy ghi chú: **{identifier}**"
     
     record_id = note.get("record_id")
-    note_key = note.get("fields", {}).get("note_key", "")
+    note_key = note.get("note_key", "")
     
-    if delete_note(record_id):
+    result = await delete_note(record_id)
+    if result and not result.get("error"):
         return f"✅ Đã hoàn thành: **{note_key}**\n🔔 Sẽ dừng nhắc nhở về ghi chú này."
     else:
         return "❌ Không thể đánh dấu hoàn thành. Vui lòng thử lại."
 
 
-def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
+async def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
     """Update an existing note"""
-    notes = get_notes_by_chat_id(chat_id)
+    notes = await get_notes_by_chat_id(chat_id)
     
     try:
         index = int(note_index) - 1
@@ -508,14 +507,9 @@ def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value:
         note = notes[index]
         record_id = note.get("record_id")
         
-        fields = {
-            "note_key": note_key,
-            "note_value": note_value
-        }
-        if deadline:
-            fields["deadline"] = deadline
-        
-        if update_note(record_id, fields):
+        deadline_str = deadline.isoformat() if isinstance(deadline, datetime) else deadline
+        result = await update_note(record_id, note_value=note_value or note_key, deadline=deadline_str)
+        if result and not result.get("error"):
             response = f"✅ Đã cập nhật ghi chú #{note_index}: **{note_key}**"
             if deadline:
                 response += f"\n📅 Hạn mới: {deadline.strftime('%d/%m/%Y %H:%M')}"
@@ -531,17 +525,16 @@ def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value:
 # REMINDER FUNCTIONS (for scheduler)
 # ============================================================================
 
-def get_due_reminders(hours: int = 24) -> List[Dict]:
+async def get_due_reminders(hours: int = 24) -> List[Dict]:
     """Get notes that are due within the next N hours"""
-    return get_notes_due_soon(hours)
+    return await get_notes_due_soon(hours)
 
 
 def format_reminder_message(note: Dict) -> str:
     """Format a reminder notification"""
-    fields = note.get("fields", {})
-    note_key = fields.get("note_key", "Nhắc nhở")
-    note_value = fields.get("note_value", "")
-    deadline = fields.get("deadline")
+    note_key = note.get("note_key", "Nhắc nhở")
+    note_value = note.get("note_value", "")
+    deadline = note.get("deadline")
     
     lines = ["🔔 **NHẮC NHỞ**", ""]
     lines.append(f"📌 **{note_key}**")
@@ -581,10 +574,10 @@ def format_reminder_message(note: Dict) -> str:
 # DEBUG FUNCTIONS
 # ============================================================================
 
-def debug_notes():
+async def debug_notes():
     """Debug notes table"""
     try:
-        all_notes = get_all_notes()
+        all_notes = await get_all_notes()
         print(f"Total notes: {len(all_notes)}")
         for note in all_notes[:5]:
             print(f"  - {note}")
