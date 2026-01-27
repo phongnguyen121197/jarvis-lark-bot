@@ -1,7 +1,7 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
-Version 5.7.16 - Fixed data structure mismatch with report_generator
+Version 5.7.17 - Fixed content breakdown filter and format
 """
 import os
 import re
@@ -1735,12 +1735,21 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
         # Parse loại video (v5.7.15)
         loai_video = extract_loai_video(fields)
         
+        # Parse phân loại gửi hàng (v5.7.17)
+        phan_loai_gh = find_phan_loai_field(fields)
+        
+        # Debug: log field names để check (chỉ log 1 lần)
+        if len(result) == 0:
+            print(f"📋 Available fields: {list(fields.keys())}")
+            print(f"   Loại video raw: {fields.get('Loại video')}")
+        
         result.append({
             "nhan_su": safe_extract_person_name(fields.get("Nhân sự book")),
             "san_pham": fields.get("Sản phẩm"),
             "thang": thang,
             "tuan": tuan,
             "loai_video": loai_video,  # v5.7.15 - content breakdown
+            "phan_loai_gh": phan_loai_gh,  # v5.7.17 - phân loại gửi hàng
             "kpi_so_luong": fields.get("KPI Số lượng"),
             "kpi_ngan_sach": fields.get("KPI ngân sách"),
             "so_luong_deal": fields.get("Số lượng - Deal", 0),
@@ -2018,10 +2027,16 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.15) ===
-    # Aggregate content theo nhân sự, sản phẩm và loại video (Cart/Text/Video)
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.17 KALLE) ===
+    # Aggregate content theo nhân sự, sản phẩm, loại video (Cart/Text/Video), và phân loại gửi hàng
+    # IMPORTANT: Chỉ lấy Tuần 1 để khớp với KPI (tránh bị x4)
     content_by_nhan_su = {}
     for r in dashboard_records:
+        # v5.7.17: Filter theo Tuần 1 giống KPI
+        tuan = r.get("tuan")
+        if tuan and tuan != "Tuần 1":
+            continue
+        
         nhan_su = r.get("nhan_su")
         if nhan_su:
             nhan_su = nhan_su.strip()
@@ -2029,7 +2044,8 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             continue
         
         san_pham = r.get("san_pham") or "N/A"
-        loai_video = r.get("loai_video") or "Video"  # Default to "Video" if not specified
+        loai_video = r.get("loai_video") or "Video"  # Cart/Text/Video
+        phan_loai_gh = r.get("phan_loai_gh") or ""  # Phân loại gửi hàng
         so_luong_air = int(r.get("so_luong_tong_air") or r.get("so_luong_air") or 0)
         
         if so_luong_air == 0:
@@ -2038,10 +2054,10 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         if nhan_su not in content_by_nhan_su:
             content_by_nhan_su[nhan_su] = []
         
-        # Tìm xem đã có entry cho sản phẩm + loại này chưa
+        # Tìm xem đã có entry cho sản phẩm + loại + phân loại này chưa
         found = False
         for item in content_by_nhan_su[nhan_su]:
-            if item["san_pham"] == san_pham and item["loai"] == loai_video:
+            if item["san_pham"] == san_pham and item["loai"] == loai_video and item.get("phan_loai") == phan_loai_gh:
                 item["so_luong"] += so_luong_air
                 found = True
                 break
@@ -2050,6 +2066,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             content_by_nhan_su[nhan_su].append({
                 "san_pham": san_pham,
                 "loai": loai_video,
+                "phan_loai": phan_loai_gh,
                 "so_luong": so_luong_air
             })
     
@@ -2057,7 +2074,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     for nhan_su in content_by_nhan_su:
         content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
     
-    print(f"📝 KALLE Content breakdown: {len(content_by_nhan_su)} nhân sự")
+    print(f"📝 KALLE Content breakdown (Tuần 1): {len(content_by_nhan_su)} nhân sự")
     
     # Tổng quan
     total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
@@ -2075,22 +2092,35 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         # Get contact info for this staff
         contact_info = lien_he_by_nhan_su.get(nhan_su_name, {})
         
-        # Get content breakdown for this staff
+        # Get content breakdown for this staff (v5.7.17 - new format)
         content_items = content_by_nhan_su.get(nhan_su_name, [])
         content_breakdown = {}
         total_by_type = {"Cart": 0, "Text": 0, "Video": 0}
         
         for item in content_items:
-            key = f"{item.get('san_pham', 'N/A')} ({item.get('loai', 'Video')})"
-            content_breakdown[key] = item.get("so_luong", 0)
+            san_pham = item.get('san_pham', 'N/A')
+            loai = item.get('loai', 'Video')
+            phan_loai = item.get('phan_loai', '')
+            so_luong = item.get("so_luong", 0)
+            
+            # v5.7.17: Format key theo yêu cầu: "{loai} {sản_phẩm},{loai},{phân_loại}"
+            # Example: "cart Nước hoa,Cart,Dark Beauty 30ml"
+            if phan_loai:
+                key = f"{loai.lower()} {san_pham},{loai},{phan_loai}"
+            else:
+                key = f"{loai.lower()} {san_pham},{loai}"
+            
+            if key in content_breakdown:
+                content_breakdown[key] += so_luong
+            else:
+                content_breakdown[key] = so_luong
             
             # Track totals by type
-            loai = item.get("loai", "Video")
             if loai in total_by_type:
-                total_by_type[loai] += item.get("so_luong", 0)
+                total_by_type[loai] += so_luong
         
         # Add totals to content breakdown
-        content_breakdown["total"] = sum(content_breakdown.values())
+        content_breakdown["total"] = sum(v for k, v in content_breakdown.items() if k not in ("total", "total_cart", "total_text"))
         content_breakdown["total_cart"] = total_by_type.get("Cart", 0)
         content_breakdown["total_text"] = total_by_type.get("Text", 0)
         
