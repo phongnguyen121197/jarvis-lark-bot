@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from lark_base import (
-    get_notes_by_chat,
+    get_notes_by_chat_id,
     create_note,
     update_note,
     delete_note,
@@ -399,7 +399,7 @@ def handle_add_note(chat_id: str, note_key: str, note_value: str, deadline: date
 
 def handle_view_notes(chat_id: str) -> str:
     """View all notes for a chat"""
-    notes = get_notes_by_chat(chat_id)
+    notes = get_notes_by_chat_id(chat_id)
     
     if not notes:
         return "📝 Bạn chưa có ghi chú nào."
@@ -437,7 +437,7 @@ def handle_view_notes(chat_id: str) -> str:
 
 def handle_delete_note(chat_id: str, note_index: str) -> str:
     """Delete a note by index"""
-    notes = get_notes_by_chat(chat_id)
+    notes = get_notes_by_chat_id(chat_id)
     
     try:
         index = int(note_index) - 1
@@ -459,7 +459,7 @@ def handle_delete_note(chat_id: str, note_index: str) -> str:
 
 def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id") -> str:
     """Mark a note as done"""
-    notes = get_notes_by_chat(chat_id)
+    notes = get_notes_by_chat_id(chat_id)
     
     if not notes:
         return "📝 Bạn chưa có ghi chú nào."
@@ -498,7 +498,7 @@ def handle_done_note(chat_id: str, identifier: str, identifier_type: str = "id")
 
 def handle_update_note(chat_id: str, note_index: str, note_key: str, note_value: str, deadline: datetime = None) -> str:
     """Update an existing note"""
-    notes = get_notes_by_chat(chat_id)
+    notes = get_notes_by_chat_id(chat_id)
     
     try:
         index = int(note_index) - 1
