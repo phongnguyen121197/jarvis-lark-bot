@@ -1,7 +1,7 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
-Version 5.7.17 - Fixed content breakdown filter and format
+Version 5.7.19 - Content breakdown from Booking table instead of Dashboard
 """
 import os
 import re
@@ -393,14 +393,16 @@ def safe_number(val, default=0):
 
 def extract_loai_video(record: Dict) -> Optional[str]:
     """
-    Trích xuất field "Loại video" từ record
+    Trích xuất field "Content" từ record
     Các giá trị: Cart, Text, Video
-    v5.7.15 - Added for content breakdown
+    v5.7.17 - Fixed: field tên là "Content Text" trong Dashboard Tháng
     """
     fields = record if "fields" not in record else record.get("fields", {})
     
-    # Các tên field có thể có
+    # Các tên field có thể có (ưu tiên từ trên xuống)
     possible_names = [
+        "Content Text",     # v5.7.17 - Tên field thực tế trong Dashboard Tháng
+        "Content",
         "Loại video",
         "Loai video", 
         "Loại Video",
@@ -1741,7 +1743,8 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
         # Debug: log field names để check (chỉ log 1 lần)
         if len(result) == 0:
             print(f"📋 Available fields: {list(fields.keys())}")
-            print(f"   Loại video raw: {fields.get('Loại video')}")
+            print(f"   Content Text raw: {fields.get('Content Text')}")
+            print(f"   Loại video extracted: {loai_video}")
         
         result.append({
             "nhan_su": safe_extract_person_name(fields.get("Nhân sự book")),
@@ -2027,54 +2030,110 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.17 KALLE) ===
-    # Aggregate content theo nhân sự, sản phẩm, loại video (Cart/Text/Video), và phân loại gửi hàng
-    # IMPORTANT: Chỉ lấy Tuần 1 để khớp với KPI (tránh bị x4)
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.19 KALLE) ===
+    # Lấy từ BOOKING_BASE thay vì Dashboard Tháng
+    # Booking có đầy đủ: Content (Cart/Text), Sản phẩm, Phân loại sp gửi hàng
     content_by_nhan_su = {}
-    for r in dashboard_records:
-        # v5.7.17: Filter theo Tuần 1 giống KPI
-        tuan = r.get("tuan")
-        if tuan and tuan != "Tuần 1":
+    
+    for record in booking_records:
+        fields = record.get("fields", {})
+        
+        # Chỉ đếm records đã air (có Link air bài)
+        link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
+        if not link_air:
             continue
         
-        nhan_su = r.get("nhan_su")
+        # Filter theo tháng air
+        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
+        thang_air = None
+        
+        if thoi_gian_air:
+            try:
+                if isinstance(thoi_gian_air, (int, float)):
+                    dt = datetime.fromtimestamp(thoi_gian_air / 1000)
+                    thang_air = dt.month
+                elif isinstance(thoi_gian_air, str):
+                    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
+                        try:
+                            dt = datetime.strptime(thoi_gian_air[:10], fmt)
+                            thang_air = dt.month
+                            break
+                        except:
+                            continue
+            except:
+                pass
+        
+        # Fallback to Tháng dự kiến
+        if thang_air is None:
+            thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air") or fields.get("Tháng air")
+            try:
+                if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
+                    first = thang_du_kien_raw[0]
+                    thang_air = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
+                elif isinstance(thang_du_kien_raw, (int, float)):
+                    thang_air = int(thang_du_kien_raw)
+                elif isinstance(thang_du_kien_raw, str):
+                    thang_air = int(thang_du_kien_raw)
+            except:
+                pass
+        
+        # Filter theo tháng
+        if month and thang_air != month:
+            continue
+        
+        # Extract fields
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
         if nhan_su:
             nhan_su = nhan_su.strip()
         else:
             continue
         
-        san_pham = r.get("san_pham") or "N/A"
-        loai_video = r.get("loai_video") or "Video"  # Cart/Text/Video
-        phan_loai_gh = r.get("phan_loai_gh") or ""  # Phân loại gửi hàng
-        so_luong_air = int(r.get("so_luong_tong_air") or r.get("so_luong_air") or 0)
+        # Content type: Cart/Text (từ cột "Content" trong Booking)
+        content_type = fields.get("Content") or fields.get("Content Text") or "Video"
+        if isinstance(content_type, list) and len(content_type) > 0:
+            content_type = content_type[0] if isinstance(content_type[0], str) else content_type[0].get("text", "Video")
+        content_type = str(content_type).strip() if content_type else "Video"
         
-        if so_luong_air == 0:
-            continue
+        # Sản phẩm
+        san_pham = fields.get("Sản phẩm") or fields.get("San pham") or "N/A"
+        if isinstance(san_pham, list) and len(san_pham) > 0:
+            san_pham = san_pham[0] if isinstance(san_pham[0], str) else san_pham[0].get("text", "N/A")
+        san_pham = str(san_pham).strip() if san_pham else "N/A"
         
+        # Phân loại sp gửi hàng
+        phan_loai_gh = find_phan_loai_field(fields) or ""
+        
+        # Debug log (chỉ 1 lần)
+        if len(content_by_nhan_su) == 0:
+            print(f"📦 Booking fields sample: Content={content_type}, Sản phẩm={san_pham}, Phân loại={phan_loai_gh}")
+        
+        # Aggregate
         if nhan_su not in content_by_nhan_su:
             content_by_nhan_su[nhan_su] = []
         
-        # Tìm xem đã có entry cho sản phẩm + loại + phân loại này chưa
+        # Tìm xem đã có entry cho content_type + sản phẩm + phân loại này chưa
         found = False
         for item in content_by_nhan_su[nhan_su]:
-            if item["san_pham"] == san_pham and item["loai"] == loai_video and item.get("phan_loai") == phan_loai_gh:
-                item["so_luong"] += so_luong_air
+            if item["san_pham"] == san_pham and item["loai"] == content_type and item.get("phan_loai") == phan_loai_gh:
+                item["so_luong"] += 1
                 found = True
                 break
         
         if not found:
             content_by_nhan_su[nhan_su].append({
                 "san_pham": san_pham,
-                "loai": loai_video,
+                "loai": content_type,
                 "phan_loai": phan_loai_gh,
-                "so_luong": so_luong_air
+                "so_luong": 1
             })
     
     # Sort content items theo số lượng giảm dần
     for nhan_su in content_by_nhan_su:
         content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
     
-    print(f"📝 KALLE Content breakdown (Tuần 1): {len(content_by_nhan_su)} nhân sự")
+    print(f"📝 KALLE Content breakdown (from Booking, tháng {month}): {len(content_by_nhan_su)} nhân sự")
+    for ns, items in list(content_by_nhan_su.items())[:2]:
+        print(f"   {ns}: {items[:3]}")
     
     # Tổng quan
     total_kpi_so_luong = sum(d["kpi_so_luong"] for d in kpi_by_nhan_su.values())
