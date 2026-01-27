@@ -2197,6 +2197,44 @@ async def get_all_notes() -> List[Dict]:
     return notes
 
 
+async def get_notes_due_soon(minutes: int = 30) -> List[Dict]:
+    """Lấy các notes sắp đến hạn trong khoảng thời gian nhất định
+    
+    Args:
+        minutes: Số phút từ bây giờ để kiểm tra deadline (mặc định 30 phút)
+        
+    Returns:
+        List các notes có deadline trong khoảng thời gian sắp tới
+    """
+    all_notes = await get_all_notes()
+    
+    now = datetime.now()
+    deadline_threshold = now + timedelta(minutes=minutes)
+    
+    due_soon_notes = []
+    for note in all_notes:
+        deadline = note.get("deadline")
+        if deadline:
+            try:
+                # Lark Bitable stores timestamp in milliseconds
+                if isinstance(deadline, (int, float)):
+                    deadline_dt = datetime.fromtimestamp(deadline / 1000)
+                else:
+                    # Try to parse as string
+                    from dateutil import parser
+                    deadline_dt = parser.parse(str(deadline))
+                
+                # Check if deadline is between now and threshold
+                if now <= deadline_dt <= deadline_threshold:
+                    note["deadline_dt"] = deadline_dt  # Add parsed datetime
+                    due_soon_notes.append(note)
+            except Exception as e:
+                # Skip notes with invalid deadline
+                continue
+    
+    return due_soon_notes
+
+
 async def get_notes_by_chat_id(chat_id: str) -> List[Dict]:
     """Lấy tất cả notes của một chat"""
     records = await get_all_records(
