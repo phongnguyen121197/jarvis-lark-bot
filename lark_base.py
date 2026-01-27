@@ -1,7 +1,7 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
-Version 5.7.19 - Content breakdown from Booking table instead of Dashboard
+Version 5.7.20 - Fix content matching between Dashboard and Booking names
 """
 import os
 import re
@@ -2030,10 +2030,16 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.19 KALLE) ===
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.20 KALLE) ===
     # Lấy từ BOOKING_BASE thay vì Dashboard Tháng
     # Booking có đầy đủ: Content (Cart/Text), Sản phẩm, Phân loại sp gửi hàng
     content_by_nhan_su = {}
+    
+    # Debug counters
+    total_booking_records = len(booking_records)
+    records_with_link_air = 0
+    records_month_match = 0
+    records_with_nhan_su = 0
     
     for record in booking_records:
         fields = record.get("fields", {})
@@ -2042,6 +2048,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
         if not link_air:
             continue
+        records_with_link_air += 1
         
         # Filter theo tháng air
         thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
@@ -2080,6 +2087,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         # Filter theo tháng
         if month and thang_air != month:
             continue
+        records_month_match += 1
         
         # Extract fields
         nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
@@ -2087,6 +2095,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             nhan_su = nhan_su.strip()
         else:
             continue
+        records_with_nhan_su += 1
         
         # Content type: Cart/Text (từ cột "Content" trong Booking)
         content_type = fields.get("Content") or fields.get("Content Text") or "Video"
@@ -2131,7 +2140,10 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     for nhan_su in content_by_nhan_su:
         content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
     
-    print(f"📝 KALLE Content breakdown (from Booking, tháng {month}): {len(content_by_nhan_su)} nhân sự")
+    # v5.7.20: Debug log for content counting
+    total_content_count = sum(sum(item["so_luong"] for item in items) for items in content_by_nhan_su.values())
+    print(f"📦 Booking debug: total={total_booking_records}, with_link={records_with_link_air}, month_match={records_month_match}, with_nhan_su={records_with_nhan_su}")
+    print(f"📝 KALLE Content breakdown (from Booking, tháng {month}): {len(content_by_nhan_su)} nhân sự, tổng {total_content_count} content")
     for ns, items in list(content_by_nhan_su.items())[:2]:
         print(f"   {ns}: {items[:3]}")
     
@@ -2147,12 +2159,61 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     # === TRANSFORM DATA FOR REPORT_GENERATOR (v5.7.16) ===
     # Convert Dict format to List format expected by report_generator
     staff_list = []
+    
+    # v5.7.20: Debug - so sánh tên từ Dashboard vs Booking
+    print(f"🔍 Tên từ Dashboard (kpi_by_nhan_su): {list(kpi_by_nhan_su.keys())}")
+    print(f"🔍 Tên từ Booking (content_by_nhan_su): {list(content_by_nhan_su.keys())}")
+    
+    # v5.7.20: Helper function để normalize tên
+    def normalize_name(name):
+        """Lấy phần tên chính, loại bỏ suffix và ký tự đặc biệt"""
+        # Lấy phần trước " - "
+        name = name.split(" - ")[0].strip()
+        # Loại bỏ phần trong ngoặc: "(vịt)", "(1)", etc.
+        import re
+        name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+        return name.lower()
+    
+    # v5.7.20: Pre-build mapping từ normalized name -> content
+    content_by_normalized = {}
+    for booking_name, booking_content in content_by_nhan_su.items():
+        normalized = normalize_name(booking_name)
+        content_by_normalized[normalized] = booking_content
+        # Thêm cả tên đầy đủ
+        content_by_normalized[booking_name.lower().strip()] = booking_content
+    
     for nhan_su_name, kpi_data in kpi_by_nhan_su.items():
         # Get contact info for this staff
         contact_info = lien_he_by_nhan_su.get(nhan_su_name, {})
         
-        # Get content breakdown for this staff (v5.7.17 - new format)
+        # v5.7.20: Get content breakdown with flexible matching
+        content_items = []
+        
+        # 1. Thử exact match trước
         content_items = content_by_nhan_su.get(nhan_su_name, [])
+        
+        # 2. Nếu không có, thử normalized match
+        if not content_items:
+            normalized_dashboard = normalize_name(nhan_su_name)
+            content_items = content_by_normalized.get(normalized_dashboard, [])
+            if content_items:
+                print(f"   ✅ Matched (normalized): '{nhan_su_name}' → '{normalized_dashboard}' ({len(content_items)} items)")
+        
+        # 3. Nếu vẫn không có, thử partial match
+        if not content_items:
+            dashboard_parts = normalize_name(nhan_su_name).split()
+            for booking_name, booking_content in content_by_nhan_su.items():
+                booking_parts = normalize_name(booking_name).split()
+                # Match nếu có ít nhất 2 từ giống nhau (họ + tên)
+                common_parts = set(dashboard_parts) & set(booking_parts)
+                if len(common_parts) >= 2:
+                    content_items = booking_content
+                    print(f"   ✅ Matched (partial): '{nhan_su_name}' → '{booking_name}' ({len(content_items)} items)")
+                    break
+        
+        if not content_items:
+            print(f"   ⚠️ No content match for: '{nhan_su_name}'")
+        
         content_breakdown = {}
         total_by_type = {"Cart": 0, "Text": 0, "Video": 0}
         

@@ -62,8 +62,8 @@ DELETE_PATTERNS = [
 
 # Done/Complete patterns
 DONE_PATTERNS = [
-    r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s*#?(\d+)',
-    r'#(\d+)\s*(?:done|xong|hoàn thành|hoan thanh|complete|completed)',
+    r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s*#\s*(\d+)',  # "Done # 1", "Done #1"
+    r'#\s*(\d+)\s*(?:done|xong|hoàn thành|hoan thanh|complete|completed)',  # "# 1 done"
     r'(?:done|xong|hoàn thành|hoan thanh|complete|completed)\s+(.+)',
     r'(?:đã xong|da xong|đã hoàn thành|da hoan thanh)\s+(.+)',
 ]
