@@ -1,7 +1,7 @@
 """
 Lark Base API Module
 Kết nối và đọc dữ liệu từ Lark Bitable
-Version 5.7.15 - Added content_by_nhan_su aggregation for KPI reports
+Version 5.7.16 - Fixed data structure mismatch with report_generator
 """
 import os
 import re
@@ -1931,7 +1931,12 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         if nhan_su:
             nhan_su = nhan_su.strip()
         
+        # v5.7.16: Removed Tuần 1 filter - KPI should aggregate all weeks
+        # Note: KPI values are stored per-row, so we need to be careful about double-counting
+        # If KPI is duplicated across weeks, we should only count from Tuần 1
         tuan = r.get("tuan")
+        # If KPI values are same across weeks, only count from first week to avoid duplication
+        # Otherwise comment these lines to aggregate all weeks
         if tuan and tuan != "Tuần 1":
             continue
         
@@ -2063,9 +2068,82 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     
     print(f"📊 TỔNG QUAN: {total_so_luong_air}/{total_kpi_so_luong} ({round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0}%)")
     
+    # === TRANSFORM DATA FOR REPORT_GENERATOR (v5.7.16) ===
+    # Convert Dict format to List format expected by report_generator
+    staff_list = []
+    for nhan_su_name, kpi_data in kpi_by_nhan_su.items():
+        # Get contact info for this staff
+        contact_info = lien_he_by_nhan_su.get(nhan_su_name, {})
+        
+        # Get content breakdown for this staff
+        content_items = content_by_nhan_su.get(nhan_su_name, [])
+        content_breakdown = {}
+        total_by_type = {"Cart": 0, "Text": 0, "Video": 0}
+        
+        for item in content_items:
+            key = f"{item.get('san_pham', 'N/A')} ({item.get('loai', 'Video')})"
+            content_breakdown[key] = item.get("so_luong", 0)
+            
+            # Track totals by type
+            loai = item.get("loai", "Video")
+            if loai in total_by_type:
+                total_by_type[loai] += item.get("so_luong", 0)
+        
+        # Add totals to content breakdown
+        content_breakdown["total"] = sum(content_breakdown.values())
+        content_breakdown["total_cart"] = total_by_type.get("Cart", 0)
+        content_breakdown["total_text"] = total_by_type.get("Text", 0)
+        
+        # Calculate percentages
+        video_kpi = kpi_data.get("kpi_so_luong", 0)
+        video_done = kpi_data.get("so_luong_air", 0)
+        budget_kpi = kpi_data.get("kpi_ngan_sach", 0)
+        budget_done = kpi_data.get("ngan_sach_air", 0)
+        
+        video_percent = round(video_done / video_kpi * 100, 1) if video_kpi > 0 else 0
+        budget_percent = round(budget_done / budget_kpi * 100, 1) if budget_kpi > 0 else 0
+        
+        staff_list.append({
+            "name": nhan_su_name,
+            # Video KPI
+            "video_kpi": video_kpi,
+            "video_done": video_done,
+            "video_percent": video_percent,
+            # Budget KPI
+            "budget_kpi": budget_kpi,
+            "budget_done": budget_done,
+            "budget_percent": budget_percent,
+            # Contact info
+            "contact_total": contact_info.get("tong_lien_he", 0),
+            "contact_deal": contact_info.get("da_deal", 0),
+            "contact_deal_percent": contact_info.get("ty_le_deal", 0),
+            # Content breakdown
+            "content_breakdown": content_breakdown,
+        })
+    
+    # Sort by video_done descending
+    staff_list.sort(key=lambda x: x.get("video_done", 0), reverse=True)
+    
+    print(f"📊 Staff list created: {len(staff_list)} items")
+    for s in staff_list[:3]:
+        print(f"   • {s['name']}: {s['video_done']}/{s['video_kpi']} ({s['video_percent']}%)")
+    
     return {
         "month": month,
         "week": week,
+        "brand": "KALLE",
+        # New format for report_generator (v5.7.16)
+        "staff_list": staff_list,
+        "totals": {
+            "video_kpi": total_kpi_so_luong,
+            "video_done": total_so_luong_air,
+            "video_percent": round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0,
+            "budget_kpi": total_kpi_ngan_sach,
+            "budget_done": total_ngan_sach_air,
+            "budget_percent": round(total_ngan_sach_air / total_kpi_ngan_sach * 100, 1) if total_kpi_ngan_sach > 0 else 0,
+            "total_gmv": total_gmv,
+        },
+        # Keep old format for backward compatibility
         "tong_quan": {
             "kpi_so_luong": total_kpi_so_luong,
             "so_luong_air": total_so_luong_air,
@@ -2078,7 +2156,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         "kpi_nhan_su": kpi_by_nhan_su,
         "top_koc": top_koc,
         "lien_he_nhan_su": lien_he_by_nhan_su,
-        "content_by_nhan_su": content_by_nhan_su,  # v5.7.15 - content breakdown
+        "content_by_nhan_su": content_by_nhan_su,
     }
 
 
