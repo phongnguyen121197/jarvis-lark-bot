@@ -5,10 +5,14 @@ Version 5.7.15 - Added content_by_nhan_su aggregation for KPI reports
 """
 import os
 import re
+import logging
 import httpx
 import aiohttp
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 # ============ CONFIG ============
 LARK_APP_ID = os.getenv("LARK_APP_ID")
