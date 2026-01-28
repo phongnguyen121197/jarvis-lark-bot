@@ -325,29 +325,43 @@ class NotesManager:
             return []
     
     async def get_overdue_notes(self) -> List[Note]:
-        """Get overdue notes"""
+        """Get overdue notes - v5.7.21 fixed to check note exists"""
         try:
             all_notes = await get_all_notes()
             overdue_notes = []
             now = datetime.now()
             
+            # v5.7.21: Group notes by chat_id để check index đúng
+            notes_by_chat = {}
             for record in all_notes:
-                deadline = record.get("deadline")
-                
-                if deadline:
-                    try:
-                        deadline_dt = datetime.fromtimestamp(deadline / 1000) if isinstance(deadline, (int, float)) else None
-                        if deadline_dt and deadline_dt < now:
-                            note = Note(
-                                id=str(len(overdue_notes) + 1),
-                                content=record.get("note_key", "") or record.get("note_value", ""),
-                                chat_id=record.get("chat_id", ""),
-                                deadline=deadline_dt,
-                                reminder_sent=self._reminder_sent.get(record.get("record_id"), False)
-                            )
-                            overdue_notes.append(note)
-                    except:
-                        pass
+                chat_id = record.get("chat_id", "")
+                if chat_id not in notes_by_chat:
+                    notes_by_chat[chat_id] = []
+                notes_by_chat[chat_id].append(record)
+            
+            for chat_id, chat_notes in notes_by_chat.items():
+                for idx, record in enumerate(chat_notes):
+                    deadline = record.get("deadline")
+                    record_id = record.get("record_id", "")
+                    
+                    if deadline:
+                        try:
+                            deadline_dt = datetime.fromtimestamp(deadline / 1000) if isinstance(deadline, (int, float)) else None
+                            if deadline_dt and deadline_dt < now:
+                                # v5.7.21: Use actual index (1-based) trong chat
+                                note_id = str(idx + 1)
+                                note = Note(
+                                    id=note_id,
+                                    content=record.get("note_key", "") or record.get("note_value", ""),
+                                    chat_id=chat_id,
+                                    deadline=deadline_dt,
+                                    reminder_sent=self._reminder_sent.get(record_id, False)
+                                )
+                                # v5.7.21: Track by record_id để không gửi lại
+                                if record_id and record_id not in self._reminder_sent:
+                                    overdue_notes.append(note)
+                        except:
+                            pass
             
             return overdue_notes
         except Exception as e:

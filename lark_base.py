@@ -2188,16 +2188,23 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         
         # v5.7.20: Get content breakdown with flexible matching
         content_items = []
+        match_type = "none"
         
         # 1. Thử exact match trước
         content_items = content_by_nhan_su.get(nhan_su_name, [])
+        if content_items:
+            match_type = "exact"
+            total_count = sum(item.get("so_luong", 0) for item in content_items)
+            print(f"   ✅ Matched (exact): '{nhan_su_name}' ({len(content_items)} types, {total_count} total)")
         
         # 2. Nếu không có, thử normalized match
         if not content_items:
             normalized_dashboard = normalize_name(nhan_su_name)
             content_items = content_by_normalized.get(normalized_dashboard, [])
             if content_items:
-                print(f"   ✅ Matched (normalized): '{nhan_su_name}' → '{normalized_dashboard}' ({len(content_items)} items)")
+                match_type = "normalized"
+                total_count = sum(item.get("so_luong", 0) for item in content_items)
+                print(f"   ✅ Matched (normalized): '{nhan_su_name}' → '{normalized_dashboard}' ({len(content_items)} types, {total_count} total)")
         
         # 3. Nếu vẫn không có, thử partial match
         if not content_items:
@@ -2208,7 +2215,9 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
                 common_parts = set(dashboard_parts) & set(booking_parts)
                 if len(common_parts) >= 2:
                     content_items = booking_content
-                    print(f"   ✅ Matched (partial): '{nhan_su_name}' → '{booking_name}' ({len(content_items)} items)")
+                    match_type = "partial"
+                    total_count = sum(item.get("so_luong", 0) for item in content_items)
+                    print(f"   ✅ Matched (partial): '{nhan_su_name}' → '{booking_name}' ({len(content_items)} types, {total_count} total)")
                     break
         
         if not content_items:
@@ -2243,6 +2252,10 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         content_breakdown["total"] = sum(v for k, v in content_breakdown.items() if k not in ("total", "total_cart", "total_text"))
         content_breakdown["total_cart"] = total_by_type.get("Cart", 0)
         content_breakdown["total_text"] = total_by_type.get("Text", 0)
+        
+        # v5.7.20: Debug log cho content của từng staff
+        if content_breakdown.get("total", 0) > 0:
+            print(f"   📦 {nhan_su_name}: content_total={content_breakdown.get('total', 0)}, items={len(content_items)}")
         
         # Calculate percentages
         video_kpi = kpi_data.get("kpi_so_luong", 0)

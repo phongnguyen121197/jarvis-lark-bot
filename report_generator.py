@@ -266,6 +266,13 @@ async def generate_dashboard_report_text(
         total_budget_done = totals.get("budget_done", 0)
         total_budget_percent = totals.get("budget_percent", 0)
         
+        # v5.7.20: Debug - xem content của từng staff
+        print(f"📊 DEBUG kpi_team: {len(staff_list)} staff")
+        for s in staff_list:
+            cb = s.get("content_breakdown", {})
+            total = cb.get("total", 0)
+            print(f"   • {s.get('name')}: content_total={total}, keys={len(cb)}")
+        
         # Aggregate content breakdown từ tất cả nhân sự (từ Booking)
         team_content = {}
         for staff in staff_list:
@@ -276,6 +283,12 @@ async def generate_dashboard_report_text(
                         team_content[key] += count
                     else:
                         team_content[key] = count
+        
+        # v5.7.20: Debug tổng team content
+        total_team_content = sum(team_content.values())
+        print(f"📊 DEBUG team_content: {len(team_content)} loại, tổng={total_team_content}")
+        for k, v in sorted(team_content.items(), key=lambda x: x[1], reverse=True)[:5]:
+            print(f"   • {k}: {v}")
         
         # Format content text
         content_text = ""

@@ -1,7 +1,7 @@
 """
 Jarvis - Lark AI Report Assistant
 Main application with all modules integrated
-Version 5.7.12 - Fixed NotesManager scheduler integration
+Version 5.7.21 - Fixed NotesManager scheduler integration
 
 Changelog v5.7.12:
 - Fixed AttributeError in check_and_send_reminders scheduler job
@@ -700,6 +700,57 @@ async def check_tiktok_ads_warning():
         traceback.print_exc()
 
 
+async def send_tkqc_daily_report():
+    """
+    v5.7.21: Báo cáo dư nợ TKQC hàng ngày lúc 17h
+    """
+    if not TIKTOK_ALERT_CHAT_ID:
+        return
+    
+    print("📊 TKQC Daily Report (17h) running...")
+    
+    try:
+        from tiktok_ads_crawler import get_spending_data, WARNING_THRESHOLD
+        result = await get_spending_data(force_refresh=True)
+        
+        if result.get("success"):
+            spending = result.get("spending", 0)
+            credit_limit = result.get("credit_limit", 1)
+            ratio = (spending / credit_limit * 100) if credit_limit > 0 else 0
+            
+            # Xác định trạng thái
+            if ratio >= WARNING_THRESHOLD:
+                status = f"🔴 CẢNH BÁO (>= {WARNING_THRESHOLD}%)"
+                status_emoji = "🚨"
+            elif ratio >= 70:
+                status = "🟡 Cần theo dõi"
+                status_emoji = "⚠️"
+            else:
+                status = "🟢 An toàn"
+                status_emoji = "✅"
+            
+            report_msg = (
+                f"{status_emoji} **BÁO CÁO DƯ NỢ TKQC - 17H**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"💳 **Dư nợ hiện tại:** {spending:,.0f} VND\n"
+                f"🏦 **Hạn mức:** {credit_limit:,.0f} VND\n"
+                f"📊 **Tỷ lệ sử dụng:** **{ratio:.1f}%**\n\n"
+                f"📈 **Trạng thái:** {status}\n"
+                f"📅 Cập nhật: {result.get('updated_at', 'N/A')}"
+            )
+            
+            await send_lark_message(TIKTOK_ALERT_CHAT_ID, report_msg)
+            print(f"📊 Sent TKQC daily report 17h (ratio: {ratio:.1f}%)")
+        else:
+            error_msg = f"❌ Không thể lấy dữ liệu TKQC: {result.get('error')}"
+            await send_lark_message(TIKTOK_ALERT_CHAT_ID, error_msg)
+            print(f"❌ Failed to get TKQC data: {result.get('error')}")
+    except Exception as e:
+        print(f"❌ TKQC daily report error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 @app.on_event("startup")
 async def startup_event():
     # Job 1: Nhắc nhở daily (theo config REMINDER_HOUR)
@@ -727,6 +778,16 @@ async def startup_event():
             replace_existing=True
         )
         print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM")
+    
+    # Job 4: v5.7.21 - Báo cáo dư nợ TKQC lúc 17h hàng ngày
+    if TIKTOK_ALERT_CHAT_ID:
+        scheduler.add_job(
+            send_tkqc_daily_report,
+            CronTrigger(hour=17, minute=0, timezone=TIMEZONE),
+            id="tkqc_daily_report_17h",
+            replace_existing=True
+        )
+        print(f"📊 TKQC Daily Report scheduled: Everyday at 17:00")
         
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
