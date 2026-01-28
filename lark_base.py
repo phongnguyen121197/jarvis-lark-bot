@@ -1763,6 +1763,9 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
             "ngan_sach_tong_air": fields.get("Ngân sách tổng - Air", 0),
             "pct_kpi_so_luong": fields.get("% KPI Số lượng tổng", 0),
             "pct_kpi_ngan_sach": fields.get("% KPI Ngân sách tổng - Air", 0),
+            # v5.7.24: Content fields
+            "content_text": fields.get("Content Text") or 0,
+            "content_cart": fields.get("Content cart") or 0,
         })
     
     print(f"📊 Month distribution: {month_distribution}")
@@ -2030,45 +2033,35 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.23 KALLE) ===
-    # Lấy từ DASHBOARD THÁNG - có sẵn cột Content Text và Content cart
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.24 KALLE) ===
+    # Lấy từ DASHBOARD THÁNG - đã parse sẵn content_text và content_cart
     content_by_nhan_su = {}
     
     total_content_text = 0
     total_content_cart = 0
     
-    for record in dashboard_records:
-        fields = record.get("fields", {})
-        
-        # Lấy nhân sự
-        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+    for r in dashboard_records:
+        nhan_su = r.get("nhan_su")
         if not nhan_su:
             continue
         nhan_su = nhan_su.strip()
         
         # Lấy sản phẩm
-        san_pham = fields.get("Sản phẩm") or "N/A"
+        san_pham = r.get("san_pham") or "N/A"
         if isinstance(san_pham, list) and len(san_pham) > 0:
             san_pham = san_pham[0] if isinstance(san_pham[0], str) else san_pham[0].get("text", "N/A")
         san_pham = str(san_pham).strip() if san_pham else "N/A"
         
-        # Lấy Content Text (số lượng)
-        content_text_raw = fields.get("Content Text") or fields.get("Content text") or 0
+        # Lấy Content Text và Cart (đã parse trong get_dashboard_thang_records)
         try:
-            content_text = int(content_text_raw) if content_text_raw else 0
+            content_text = int(r.get("content_text") or 0)
         except:
             content_text = 0
         
-        # Lấy Content cart (số lượng gắn giỏ)
-        content_cart_raw = fields.get("Content cart") or fields.get("Content Cart") or fields.get("Content gắn giỏ") or 0
         try:
-            content_cart = int(content_cart_raw) if content_cart_raw else 0
+            content_cart = int(r.get("content_cart") or 0)
         except:
             content_cart = 0
-        
-        # Debug log (chỉ 1 lần)
-        if len(content_by_nhan_su) == 0 and (content_text > 0 or content_cart > 0):
-            print(f"📦 Dashboard fields sample: Nhân sự={nhan_su}, Sản phẩm={san_pham}, Text={content_text}, Cart={content_cart}")
         
         total_content_text += content_text
         total_content_cart += content_cart
@@ -2113,9 +2106,9 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     for nhan_su in content_by_nhan_su:
         content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
     
-    # v5.7.23: Debug log
+    # v5.7.24: Debug log
     total_content_count = total_content_text + total_content_cart
-    print(f"📝 KALLE Content (from Dashboard): {len(content_by_nhan_su)} nhân sự, Cart={total_content_cart}, Text={total_content_text}, Tổng={total_content_count}")
+    print(f"📝 KALLE Content (from Dashboard): Cart={total_content_cart}, Text={total_content_text}, Tổng={total_content_count}")
     for ns, items in list(content_by_nhan_su.items())[:2]:
         print(f"   {ns}: {items[:3]}")
     

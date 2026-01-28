@@ -1,7 +1,7 @@
 """
 Jarvis - Lark AI Report Assistant
 Main application with all modules integrated
-Version 5.7.23 - Fixed NotesManager scheduler integration
+Version 5.7.24 - Fixed NotesManager scheduler integration
 
 Changelog v5.7.12:
 - Fixed AttributeError in check_and_send_reminders scheduler job
@@ -729,7 +729,7 @@ async def startup_event():
         print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM and 17:00 PM")
         
     scheduler.start()
-    print(f"🚀 Scheduler started. Daily reminder at {REMINDER_HOUR}:{REMINDER_MINUTE:02d} {TIMEZONE}")
+    print(f"🚀 Scheduler started. Daily reminder at 9:00 & 17:00 {TIMEZONE}")
 
 
 @app.on_event("shutdown")
