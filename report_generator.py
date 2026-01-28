@@ -290,7 +290,7 @@ async def generate_dashboard_report_text(
         for k, v in sorted(team_content.items(), key=lambda x: x[1], reverse=True)[:5]:
             print(f"   • {k}: {v}")
         
-        # Format content text
+        # Format content text - v5.7.22: Thêm tổng số
         content_text = ""
         if team_content:
             sorted_content = sorted(team_content.items(), key=lambda x: x[1], reverse=True)
@@ -298,7 +298,7 @@ async def generate_dashboard_report_text(
             if len(content_parts) <= 2:
                 content_text = " và ".join(content_parts)
             else:
-                content_text = ", ".join(content_parts[:2]) + f" và {len(content_parts) - 2} loại khác"
+                content_text = ", ".join(content_parts[:2]) + f" và {len(sorted_content) - 2} loại khác"
         
         # Calculate status
         avg_percent = (total_video_percent + total_budget_percent) / 2 if (total_video_percent + total_budget_percent) > 0 else 0
@@ -332,7 +332,7 @@ async def generate_dashboard_report_text(
         ]
         
         if content_text:
-            lines.append(f"   **Content: {content_text}**")
+            lines.append(f"   **Content ({total_team_content}): {content_text}**")
         
         lines.extend([
             "",

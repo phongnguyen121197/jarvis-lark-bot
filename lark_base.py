@@ -2030,120 +2030,92 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
             data["ty_le_trao_doi"] = 0
             data["ty_le_tu_choi"] = 0
     
-    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.20 KALLE) ===
-    # Lấy từ BOOKING_BASE thay vì Dashboard Tháng
-    # Booking có đầy đủ: Content (Cart/Text), Sản phẩm, Phân loại sp gửi hàng
+    # === CONTENT BREAKDOWN BY NHÂN SỰ (v5.7.23 KALLE) ===
+    # Lấy từ DASHBOARD THÁNG - có sẵn cột Content Text và Content cart
     content_by_nhan_su = {}
     
-    # Debug counters
-    total_booking_records = len(booking_records)
-    records_with_link_air = 0
-    records_month_match = 0
-    records_with_nhan_su = 0
+    total_content_text = 0
+    total_content_cart = 0
     
-    for record in booking_records:
+    for record in dashboard_records:
         fields = record.get("fields", {})
         
-        # Chỉ đếm records đã air (có Link air bài)
-        link_air = fields.get("Link air bài") or fields.get("link_air_bai") or fields.get("Link air")
-        if not link_air:
-            continue
-        records_with_link_air += 1
-        
-        # Filter theo tháng air
-        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
-        thang_air = None
-        
-        if thoi_gian_air:
-            try:
-                if isinstance(thoi_gian_air, (int, float)):
-                    dt = datetime.fromtimestamp(thoi_gian_air / 1000)
-                    thang_air = dt.month
-                elif isinstance(thoi_gian_air, str):
-                    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
-                        try:
-                            dt = datetime.strptime(thoi_gian_air[:10], fmt)
-                            thang_air = dt.month
-                            break
-                        except:
-                            continue
-            except:
-                pass
-        
-        # Fallback to Tháng dự kiến
-        if thang_air is None:
-            thang_du_kien_raw = fields.get("Tháng dự kiến") or fields.get("Tháng dự kiến air") or fields.get("Tháng air")
-            try:
-                if isinstance(thang_du_kien_raw, list) and len(thang_du_kien_raw) > 0:
-                    first = thang_du_kien_raw[0]
-                    thang_air = int(first.get("text", 0)) if isinstance(first, dict) else int(first)
-                elif isinstance(thang_du_kien_raw, (int, float)):
-                    thang_air = int(thang_du_kien_raw)
-                elif isinstance(thang_du_kien_raw, str):
-                    thang_air = int(thang_du_kien_raw)
-            except:
-                pass
-        
-        # Filter theo tháng
-        if month and thang_air != month:
-            continue
-        records_month_match += 1
-        
-        # Extract fields
+        # Lấy nhân sự
         nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
-        if nhan_su:
-            nhan_su = nhan_su.strip()
-        else:
+        if not nhan_su:
             continue
-        records_with_nhan_su += 1
+        nhan_su = nhan_su.strip()
         
-        # Content type: Cart/Text (từ cột "Content" trong Booking)
-        content_type = fields.get("Content") or fields.get("Content Text") or "Video"
-        if isinstance(content_type, list) and len(content_type) > 0:
-            content_type = content_type[0] if isinstance(content_type[0], str) else content_type[0].get("text", "Video")
-        content_type = str(content_type).strip() if content_type else "Video"
-        
-        # Sản phẩm
-        san_pham = fields.get("Sản phẩm") or fields.get("San pham") or "N/A"
+        # Lấy sản phẩm
+        san_pham = fields.get("Sản phẩm") or "N/A"
         if isinstance(san_pham, list) and len(san_pham) > 0:
             san_pham = san_pham[0] if isinstance(san_pham[0], str) else san_pham[0].get("text", "N/A")
         san_pham = str(san_pham).strip() if san_pham else "N/A"
         
-        # Phân loại sp gửi hàng
-        phan_loai_gh = find_phan_loai_field(fields) or ""
+        # Lấy Content Text (số lượng)
+        content_text_raw = fields.get("Content Text") or fields.get("Content text") or 0
+        try:
+            content_text = int(content_text_raw) if content_text_raw else 0
+        except:
+            content_text = 0
+        
+        # Lấy Content cart (số lượng gắn giỏ)
+        content_cart_raw = fields.get("Content cart") or fields.get("Content Cart") or fields.get("Content gắn giỏ") or 0
+        try:
+            content_cart = int(content_cart_raw) if content_cart_raw else 0
+        except:
+            content_cart = 0
         
         # Debug log (chỉ 1 lần)
-        if len(content_by_nhan_su) == 0:
-            print(f"📦 Booking fields sample: Content={content_type}, Sản phẩm={san_pham}, Phân loại={phan_loai_gh}")
+        if len(content_by_nhan_su) == 0 and (content_text > 0 or content_cart > 0):
+            print(f"📦 Dashboard fields sample: Nhân sự={nhan_su}, Sản phẩm={san_pham}, Text={content_text}, Cart={content_cart}")
         
-        # Aggregate
+        total_content_text += content_text
+        total_content_cart += content_cart
+        
+        # Aggregate theo nhân sự
         if nhan_su not in content_by_nhan_su:
             content_by_nhan_su[nhan_su] = []
         
-        # Tìm xem đã có entry cho content_type + sản phẩm + phân loại này chưa
-        found = False
-        for item in content_by_nhan_su[nhan_su]:
-            if item["san_pham"] == san_pham and item["loai"] == content_type and item.get("phan_loai") == phan_loai_gh:
-                item["so_luong"] += 1
-                found = True
-                break
+        # Thêm Content cart nếu có
+        if content_cart > 0:
+            found = False
+            for item in content_by_nhan_su[nhan_su]:
+                if item["san_pham"] == san_pham and item["loai"] == "Cart":
+                    item["so_luong"] += content_cart
+                    found = True
+                    break
+            if not found:
+                content_by_nhan_su[nhan_su].append({
+                    "san_pham": san_pham,
+                    "loai": "Cart",
+                    "phan_loai": "",
+                    "so_luong": content_cart
+                })
         
-        if not found:
-            content_by_nhan_su[nhan_su].append({
-                "san_pham": san_pham,
-                "loai": content_type,
-                "phan_loai": phan_loai_gh,
-                "so_luong": 1
-            })
+        # Thêm Content text nếu có
+        if content_text > 0:
+            found = False
+            for item in content_by_nhan_su[nhan_su]:
+                if item["san_pham"] == san_pham and item["loai"] == "Text":
+                    item["so_luong"] += content_text
+                    found = True
+                    break
+            if not found:
+                content_by_nhan_su[nhan_su].append({
+                    "san_pham": san_pham,
+                    "loai": "Text",
+                    "phan_loai": "",
+                    "so_luong": content_text
+                })
     
     # Sort content items theo số lượng giảm dần
     for nhan_su in content_by_nhan_su:
         content_by_nhan_su[nhan_su].sort(key=lambda x: x["so_luong"], reverse=True)
     
-    # v5.7.20: Debug log for content counting
-    total_content_count = sum(sum(item["so_luong"] for item in items) for items in content_by_nhan_su.values())
-    print(f"📦 Booking debug: total={total_booking_records}, with_link={records_with_link_air}, month_match={records_month_match}, with_nhan_su={records_with_nhan_su}")
-    print(f"📝 KALLE Content breakdown (from Booking, tháng {month}): {len(content_by_nhan_su)} nhân sự, tổng {total_content_count} content")
+    # v5.7.23: Debug log
+    total_content_count = total_content_text + total_content_cart
+    print(f"📝 KALLE Content (from Dashboard): {len(content_by_nhan_su)} nhân sự, Cart={total_content_cart}, Text={total_content_text}, Tổng={total_content_count}")
     for ns, items in list(content_by_nhan_su.items())[:2]:
         print(f"   {ns}: {items[:3]}")
     
@@ -2156,72 +2128,26 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
     
     print(f"📊 TỔNG QUAN: {total_so_luong_air}/{total_kpi_so_luong} ({round(total_so_luong_air / total_kpi_so_luong * 100, 1) if total_kpi_so_luong > 0 else 0}%)")
     
-    # === TRANSFORM DATA FOR REPORT_GENERATOR (v5.7.16) ===
+    # === TRANSFORM DATA FOR REPORT_GENERATOR (v5.7.23) ===
     # Convert Dict format to List format expected by report_generator
+    # Giờ content_by_nhan_su cũng từ Dashboard nên tên sẽ match
     staff_list = []
     
-    # v5.7.20: Debug - so sánh tên từ Dashboard vs Booking
-    print(f"🔍 Tên từ Dashboard (kpi_by_nhan_su): {list(kpi_by_nhan_su.keys())}")
-    print(f"🔍 Tên từ Booking (content_by_nhan_su): {list(content_by_nhan_su.keys())}")
-    
-    # v5.7.20: Helper function để normalize tên
-    def normalize_name(name):
-        """Lấy phần tên chính, loại bỏ suffix và ký tự đặc biệt"""
-        # Lấy phần trước " - "
-        name = name.split(" - ")[0].strip()
-        # Loại bỏ phần trong ngoặc: "(vịt)", "(1)", etc.
-        import re
-        name = re.sub(r'\s*\([^)]*\)', '', name).strip()
-        return name.lower()
-    
-    # v5.7.20: Pre-build mapping từ normalized name -> content
-    content_by_normalized = {}
-    for booking_name, booking_content in content_by_nhan_su.items():
-        normalized = normalize_name(booking_name)
-        content_by_normalized[normalized] = booking_content
-        # Thêm cả tên đầy đủ
-        content_by_normalized[booking_name.lower().strip()] = booking_content
+    # v5.7.23: Debug - kiểm tra tên
+    print(f"🔍 Tên từ KPI (kpi_by_nhan_su): {list(kpi_by_nhan_su.keys())}")
+    print(f"🔍 Tên từ Content (content_by_nhan_su): {list(content_by_nhan_su.keys())}")
     
     for nhan_su_name, kpi_data in kpi_by_nhan_su.items():
         # Get contact info for this staff
         contact_info = lien_he_by_nhan_su.get(nhan_su_name, {})
         
-        # v5.7.20: Get content breakdown with flexible matching
-        content_items = []
-        match_type = "none"
-        
-        # 1. Thử exact match trước
+        # v5.7.23: Get content - exact match vì cùng source Dashboard
         content_items = content_by_nhan_su.get(nhan_su_name, [])
         if content_items:
-            match_type = "exact"
             total_count = sum(item.get("so_luong", 0) for item in content_items)
-            print(f"   ✅ Matched (exact): '{nhan_su_name}' ({len(content_items)} types, {total_count} total)")
-        
-        # 2. Nếu không có, thử normalized match
-        if not content_items:
-            normalized_dashboard = normalize_name(nhan_su_name)
-            content_items = content_by_normalized.get(normalized_dashboard, [])
-            if content_items:
-                match_type = "normalized"
-                total_count = sum(item.get("so_luong", 0) for item in content_items)
-                print(f"   ✅ Matched (normalized): '{nhan_su_name}' → '{normalized_dashboard}' ({len(content_items)} types, {total_count} total)")
-        
-        # 3. Nếu vẫn không có, thử partial match
-        if not content_items:
-            dashboard_parts = normalize_name(nhan_su_name).split()
-            for booking_name, booking_content in content_by_nhan_su.items():
-                booking_parts = normalize_name(booking_name).split()
-                # Match nếu có ít nhất 2 từ giống nhau (họ + tên)
-                common_parts = set(dashboard_parts) & set(booking_parts)
-                if len(common_parts) >= 2:
-                    content_items = booking_content
-                    match_type = "partial"
-                    total_count = sum(item.get("so_luong", 0) for item in content_items)
-                    print(f"   ✅ Matched (partial): '{nhan_su_name}' → '{booking_name}' ({len(content_items)} types, {total_count} total)")
-                    break
-        
-        if not content_items:
-            print(f"   ⚠️ No content match for: '{nhan_su_name}'")
+            print(f"   ✅ {nhan_su_name}: {len(content_items)} loại, tổng {total_count}")
+        else:
+            print(f"   ⚠️ No content for: '{nhan_su_name}'")
         
         content_breakdown = {}
         total_by_type = {"Cart": 0, "Text": 0, "Video": 0}
