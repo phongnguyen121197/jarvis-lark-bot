@@ -204,7 +204,7 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
-        max_records=5000  # Increased from 2000
+        max_records=10000  # Increased to handle growing data
     )
     
     print(f"📊 Total records from Booking: {len(records)}")
@@ -246,7 +246,8 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
                 # Debug: Check if timestamp is in target range
                 if target_ts_start <= thoi_gian_air <= target_ts_end:
                     nhan_su_debug = safe_extract_person_name(fields.get("Nhân sự book"))
-                    print(f"   ✅ Found match: Nhân sự={nhan_su_debug}, ts={thoi_gian_air}, date={air_date_str}")
+                    id_koc = fields.get("ID KOC") or fields.get("id_koc") or "N/A"
+                    print(f"   ✅ Found match: ID_KOC={id_koc}, Nhân sự={nhan_su_debug}, ts={thoi_gian_air}, date={air_date_str}")
                 
             except Exception as e:
                 print(f"   ⚠️ Failed to parse timestamp {thoi_gian_air}: {e}")
@@ -291,6 +292,9 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         # Lấy nhân sự
         nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
         if not nhan_su:
+            # Debug: Record matched but no Nhân sự book
+            id_koc = fields.get("ID KOC") or fields.get("id_koc") or "N/A"
+            print(f"   ⚠️ Record matched but no Nhân sự book: ID_KOC={id_koc}, date={air_date_str}")
             continue
         nhan_su = nhan_su.strip()
         
@@ -409,24 +413,17 @@ async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_dat
     # Tính toán
     yesterday = datetime.now() - timedelta(days=1)
     today = datetime.now()
-    days_passed = today.day - 1  # Số ngày đã qua (không tính hôm nay)
     
     video_yesterday = yesterday_stats["count"]
     cart_yesterday = yesterday_stats["cart"]
     text_yesterday = yesterday_stats["text"]
     
-    # Thiếu hôm qua
+    # Logic B: Chỉ tính thiếu từ hôm qua
+    # Thiếu hôm qua = max(0, KPI - video_hôm_qua)
     deficit_yesterday = max(0, DAILY_KPI - video_yesterday)
     
-    # Tổng đã air trong tháng
-    total_done = monthly_personal.get("video_done", 0) if monthly_personal else 0
-    
-    # Tổng thiếu cộng dồn = (số ngày đã qua * KPI) - tổng đã air
-    expected_total = days_passed * DAILY_KPI
-    total_deficit = max(0, expected_total - total_done)
-    
-    # Cần air hôm nay = KPI ngày + thiếu cộng dồn
-    need_today = DAILY_KPI + total_deficit
+    # Cần air hôm nay = KPI ngày + thiếu hôm qua
+    need_today = DAILY_KPI + deficit_yesterday
     
     # Status emoji
     status = "✅ Đạt KPI!" if video_yesterday >= DAILY_KPI else f"⚠️ Thiếu {deficit_yesterday} video"
@@ -440,7 +437,7 @@ async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_dat
 • {status}
 
 📌 HÔM NAY ({today.strftime('%d/%m')}):
-• Cần air: {need_today} video ({DAILY_KPI} KPI + {total_deficit} thiếu cộng dồn)
+• Cần air: {need_today} video ({DAILY_KPI} KPI + {deficit_yesterday} thiếu hôm qua)
 
 💪 Cố lên {name}!"""
     
