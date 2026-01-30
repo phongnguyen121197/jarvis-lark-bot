@@ -265,6 +265,7 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     matched_count = 0
     records_with_link_air = 0
     records_with_thoi_gian = 0
+    unique_raw_names = set()  # Track all unique raw names on this date
     
     for record in records:
         fields = record.get("fields", {})
@@ -349,9 +350,16 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
             continue
         nhan_su = nhan_su.strip()
         
+        # Track unique raw names
+        unique_raw_names.add(nhan_su)
+        
         # Normalize tên để merge các cách viết khác nhau
         # Ví dụ: "PR Bookingg" và "PR Booking" → merge vào cùng 1 entry
         nhan_su_normalized = normalize_staff_name_for_aggregation(nhan_su)
+        
+        # Debug: Show normalize result for first 15 records
+        if matched_count <= 15:
+            print(f"   🔄 Normalize: '{nhan_su}' → '{nhan_su_normalized}'")
         
         # Lấy loại content (Cart/Text/Video)
         content_raw = fields.get("Content")
@@ -387,6 +395,10 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     print(f"📊 Records with Link air: {records_with_link_air}")
     print(f"📊 Records with Thời gian air: {records_with_thoi_gian}")
     print(f"📊 Matched records for {target_date_str}: {matched_count}")
+    
+    # Debug: Show all unique raw names found on this date
+    print(f"📋 Unique raw names on {target_date_str}: {list(unique_raw_names)}")
+    
     print(f"📊 Video air on {target_date_str}: {result}")
     return result
 
