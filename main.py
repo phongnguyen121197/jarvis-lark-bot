@@ -1,7 +1,7 @@
 """
 Jarvis - Lark AI Report Assistant
 Main application with all modules integrated
-Version 5.7.24 - Fixed NotesManager scheduler integration
+Version 5.7.25 - Fixed NotesManager scheduler integration
 
 Changelog v5.7.12:
 - Fixed AttributeError in check_and_send_reminders scheduler job
@@ -38,6 +38,7 @@ from intent_classifier import classify_intent, INTENT_KOC_REPORT, INTENT_CHENG_R
 from lark_base import generate_koc_summary, generate_content_calendar, generate_task_summary, generate_dashboard_summary, test_connection
 from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, generate_cheng_report_text
 from notes_manager import check_note_command, handle_note_command, get_notes_manager
+from daily_booking_report import send_daily_booking_reports, BOOKING_GROUP_CHAT_ID
 
 # ============ SCHEDULER CONFIG ============
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
@@ -727,6 +728,15 @@ async def startup_event():
             replace_existing=True
         )
         print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM and 17:00 PM")
+    
+    # Job 4: v5.7.25 - Daily Booking Report (9h hàng ngày)
+    scheduler.add_job(
+        send_daily_booking_reports,
+        CronTrigger(hour=9, minute=0, timezone=TIMEZONE),
+        id="daily_booking_report",
+        replace_existing=True
+    )
+    print(f"📊 Daily Booking Report scheduled: Everyday at 9:00 AM")
         
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at 9:00 & 17:00 {TIMEZONE}")
@@ -740,7 +750,7 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.7.12"}
+    return {"status": "ok", "message": "Jarvis is running 🤖", "version": "5.7.25"}
 
 @app.get("/health")
 async def health():
@@ -759,6 +769,16 @@ async def test_intent(q: str = "tóm tắt KOC tháng 12"):
 @app.get("/groups")
 async def list_groups():
     return {"registered_groups": GROUP_CHATS, "discovered_groups": get_discovered_groups()}
+
+
+@app.get("/test/daily-booking")
+async def test_daily_booking():
+    """Test endpoint để trigger daily booking report manually"""
+    try:
+        await send_daily_booking_reports()
+        return {"status": "ok", "message": "Daily booking reports sent"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":
