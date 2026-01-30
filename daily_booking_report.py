@@ -262,14 +262,14 @@ async def get_monthly_stats() -> Dict:
     """
     Lấy thống kê tháng hiện tại từ Dashboard
     """
-    from lark_base import get_kalle_dashboard_data
+    from lark_base import generate_dashboard_summary
     
     now = datetime.now()
     month = now.month
     
     print(f"📊 Getting monthly stats for month {month}...")
     
-    data = await get_kalle_dashboard_data(month=month)
+    data = await generate_dashboard_summary(month=month)
     
     if not data:
         print("❌ Failed to get dashboard data")
