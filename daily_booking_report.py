@@ -260,6 +260,22 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     
     print(f"📊 Total records from Booking: {len(records)}")
     
+    # Debug: Print all field names from FIRST record (regardless of content)
+    if records:
+        first_record_fields = records[0].get("fields", {})
+        print(f"🔍 ALL field names in first record: {list(first_record_fields.keys())}")
+        
+        # Find a record that has nhân sự = Phương Thảo or Châu Đặng
+        for r in records[:500]:
+            f = r.get("fields", {})
+            nhan_su_raw = f.get("Nhân sự book")
+            if nhan_su_raw:
+                nhan_su_str = str(nhan_su_raw)
+                if "Thảo" in nhan_su_str or "Châu" in nhan_su_str:
+                    print(f"🔍 Found Thảo/Châu record - ALL fields: {list(f.keys())}")
+                    print(f"   📋 Full record data: {f}")
+                    break
+    
     result = {}
     debug_count = 0
     matched_count = 0
