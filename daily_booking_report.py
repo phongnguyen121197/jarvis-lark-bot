@@ -13,11 +13,15 @@ from typing import Dict, List, Optional
 import httpx
 
 # ============ STAFF MAPPING ============
-# Map từ User ID Lark -> Tên trong Dashboard
+# Map từ User ID Lark -> Tên trong Dashboard/Booking
 BOOKING_STAFF = {
     "7ad1g7b9": {
         "name": "Nguyễn Như Mai",
-        "dashboard_names": ["Nguyễn Như Mai - PR Bookingg", "Nguyễn Như Mai"],
+        "dashboard_names": [
+            "Nguyễn Như Mai - PR Bookingg",  # Dashboard (2 chữ g)
+            "Nguyễn Như Mai - PR Booking",   # Booking table (1 chữ g)
+            "Nguyễn Như Mai"
+        ],
         "short_name": "Mai"
     },
     "bbc7c22c": {
@@ -42,7 +46,12 @@ BOOKING_STAFF = {
     },
     "9g9634c2": {
         "name": "Phương Thảo",
-        "dashboard_names": ["Phương Thảo - Intern Booking", "Phương Thảo intern Booking", "Phương Thảo"],
+        "dashboard_names": [
+            "Phương Thảo - Intern Booking",
+            "Phương Thảo intern Booking", 
+            "Phương Thảo Intern Booking",
+            "Phương Thảo"
+        ],
         "short_name": "Thảo"
     },
     "d2294g8g": {
@@ -183,6 +192,29 @@ def match_staff_name(search_name: str, dashboard_names: List[str]) -> bool:
     return False
 
 
+def normalize_staff_name_for_aggregation(raw_name: str) -> str:
+    """
+    Normalize tên nhân sự để merge các cách viết khác nhau.
+    Ví dụ: "Nguyễn Như Mai - PR Booking" và "Nguyễn Như Mai - PR Bookingg" 
+           → cùng trả về "Nguyễn Như Mai - PR Bookingg" (tên chuẩn trong Dashboard)
+    """
+    if not raw_name:
+        return raw_name
+    
+    raw_name = raw_name.strip()
+    
+    # Tìm trong BOOKING_STAFF xem raw_name có match với dashboard_names không
+    for user_id, staff_info in BOOKING_STAFF.items():
+        dashboard_names = staff_info.get("dashboard_names", [])
+        for db_name in dashboard_names:
+            if raw_name == db_name or raw_name.lower() == db_name.lower():
+                # Trả về tên đầu tiên (chuẩn) trong dashboard_names
+                return dashboard_names[0]
+    
+    # Nếu không match, trả về tên gốc
+    return raw_name
+
+
 async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     """
     Lấy số video air theo ngày từ Booking table
@@ -298,21 +330,25 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
             continue
         nhan_su = nhan_su.strip()
         
+        # Normalize tên để merge các cách viết khác nhau
+        # Ví dụ: "PR Bookingg" và "PR Booking" → merge vào cùng 1 entry
+        nhan_su_normalized = normalize_staff_name_for_aggregation(nhan_su)
+        
         # Lấy loại content (Cart/Text/Video)
         content_type = fields.get("Content") or "Video"
         if isinstance(content_type, list) and len(content_type) > 0:
             content_type = content_type[0] if isinstance(content_type[0], str) else content_type[0].get("text", "Video")
         content_type = str(content_type).strip().lower() if content_type else "video"
         
-        # Aggregate
-        if nhan_su not in result:
-            result[nhan_su] = {"count": 0, "cart": 0, "text": 0}
+        # Aggregate using normalized name
+        if nhan_su_normalized not in result:
+            result[nhan_su_normalized] = {"count": 0, "cart": 0, "text": 0}
         
-        result[nhan_su]["count"] += 1
+        result[nhan_su_normalized]["count"] += 1
         if "cart" in content_type:
-            result[nhan_su]["cart"] += 1
+            result[nhan_su_normalized]["cart"] += 1
         elif "text" in content_type:
-            result[nhan_su]["text"] += 1
+            result[nhan_su_normalized]["text"] += 1
     
     print(f"📊 Records with Link air: {records_with_link_air}")
     print(f"📊 Records with Thời gian air: {records_with_thoi_gian}")
