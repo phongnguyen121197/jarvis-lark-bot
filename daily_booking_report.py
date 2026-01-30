@@ -193,12 +193,18 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     from lark_base import get_all_records, BOOKING_BASE, safe_extract_person_name
     
     target_date_str = target_date.strftime("%Y/%m/%d")
-    print(f"📅 Getting video air for date: {target_date_str}")
+    # Also prepare alternate format for comparison
+    target_ts_start = int(target_date.replace(hour=0, minute=0, second=0).timestamp() * 1000)
+    target_ts_end = int(target_date.replace(hour=23, minute=59, second=59).timestamp() * 1000)
     
+    print(f"📅 Getting video air for date: {target_date_str}")
+    print(f"📅 Target timestamp range: {target_ts_start} - {target_ts_end}")
+    
+    # Increase max_records to get more data
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
-        max_records=2000
+        max_records=5000  # Increased from 2000
     )
     
     print(f"📊 Total records from Booking: {len(records)}")
@@ -206,6 +212,8 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     result = {}
     debug_count = 0
     matched_count = 0
+    records_with_link_air = 0
+    records_with_thoi_gian = 0
     
     for record in records:
         fields = record.get("fields", {})
@@ -215,16 +223,14 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         if not link_air:
             continue
         
+        records_with_link_air += 1
+        
         # Check thời gian air - try multiple field names
         thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air") or fields.get("Thoi gian air")
         if not thoi_gian_air:
             continue
         
-        # Debug: In ra 5 records đầu tiên để xem format
-        if debug_count < 5:
-            nhan_su_debug = safe_extract_person_name(fields.get("Nhân sự book"))
-            print(f"   🔍 Debug record: Nhân sự={nhan_su_debug}, Thời gian air={thoi_gian_air} (type={type(thoi_gian_air).__name__})")
-            debug_count += 1
+        records_with_thoi_gian += 1
         
         # Parse date - handle multiple formats
         air_date_str = None
@@ -236,6 +242,12 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
                 ts = thoi_gian_air / 1000 if thoi_gian_air > 1e12 else thoi_gian_air
                 dt = datetime.fromtimestamp(ts)
                 air_date_str = dt.strftime("%Y/%m/%d")
+                
+                # Debug: Check if timestamp is in target range
+                if target_ts_start <= thoi_gian_air <= target_ts_end:
+                    nhan_su_debug = safe_extract_person_name(fields.get("Nhân sự book"))
+                    print(f"   ✅ Found match: Nhân sự={nhan_su_debug}, ts={thoi_gian_air}, date={air_date_str}")
+                
             except Exception as e:
                 print(f"   ⚠️ Failed to parse timestamp {thoi_gian_air}: {e}")
                 continue
@@ -260,6 +272,12 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
                 parts = thoi_gian_air[:10].split('/')
                 if len(parts) == 3:
                     air_date_str = f"{parts[2]}/{parts[1]}/{parts[0]}"
+        
+        # Debug: In ra 5 records đầu tiên để xem format
+        if debug_count < 5:
+            nhan_su_debug = safe_extract_person_name(fields.get("Nhân sự book"))
+            print(f"   🔍 Debug record: Nhân sự={nhan_su_debug}, Thời gian air={thoi_gian_air} (type={type(thoi_gian_air).__name__}) -> parsed={air_date_str}")
+            debug_count += 1
         
         if not air_date_str:
             continue
@@ -292,6 +310,8 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         elif "text" in content_type:
             result[nhan_su]["text"] += 1
     
+    print(f"📊 Records with Link air: {records_with_link_air}")
+    print(f"📊 Records with Thời gian air: {records_with_thoi_gian}")
     print(f"📊 Matched records for {target_date_str}: {matched_count}")
     print(f"📊 Video air on {target_date_str}: {result}")
     return result
