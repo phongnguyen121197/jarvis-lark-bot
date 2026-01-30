@@ -201,7 +201,11 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         max_records=2000
     )
     
+    print(f"📊 Total records from Booking: {len(records)}")
+    
     result = {}
+    debug_count = 0
+    matched_count = 0
     
     for record in records:
         fields = record.get("fields", {})
@@ -211,26 +215,60 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         if not link_air:
             continue
         
-        # Check thời gian air
-        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air")
+        # Check thời gian air - try multiple field names
+        thoi_gian_air = fields.get("Thời gian air") or fields.get("thoi_gian_air") or fields.get("Thoi gian air")
         if not thoi_gian_air:
             continue
         
-        # Parse date - format: yyyy/mm/dd
-        air_date_str = None
-        if isinstance(thoi_gian_air, str):
-            # Format: "2025/10/09"
-            air_date_str = thoi_gian_air.strip()[:10]
-        elif isinstance(thoi_gian_air, (int, float)):
-            # Timestamp
-            try:
-                dt = datetime.fromtimestamp(thoi_gian_air / 1000)
-                air_date_str = dt.strftime("%Y/%m/%d")
-            except:
-                continue
+        # Debug: In ra 5 records đầu tiên để xem format
+        if debug_count < 5:
+            nhan_su_debug = safe_extract_person_name(fields.get("Nhân sự book"))
+            print(f"   🔍 Debug record: Nhân sự={nhan_su_debug}, Thời gian air={thoi_gian_air} (type={type(thoi_gian_air).__name__})")
+            debug_count += 1
         
-        if not air_date_str or air_date_str != target_date_str:
+        # Parse date - handle multiple formats
+        air_date_str = None
+        
+        if isinstance(thoi_gian_air, (int, float)):
+            # Lark Date field returns timestamp in milliseconds
+            try:
+                # Convert milliseconds to seconds
+                ts = thoi_gian_air / 1000 if thoi_gian_air > 1e12 else thoi_gian_air
+                dt = datetime.fromtimestamp(ts)
+                air_date_str = dt.strftime("%Y/%m/%d")
+            except Exception as e:
+                print(f"   ⚠️ Failed to parse timestamp {thoi_gian_air}: {e}")
+                continue
+        elif isinstance(thoi_gian_air, str):
+            # String format - could be "2026/01/30" or "30/01/2026" or timestamp as string
+            thoi_gian_air = thoi_gian_air.strip()
+            
+            # Check if it's a timestamp string
+            if thoi_gian_air.isdigit():
+                try:
+                    ts = int(thoi_gian_air)
+                    ts = ts / 1000 if ts > 1e12 else ts
+                    dt = datetime.fromtimestamp(ts)
+                    air_date_str = dt.strftime("%Y/%m/%d")
+                except:
+                    pass
+            # Check format YYYY/MM/DD or YYYY-MM-DD
+            elif len(thoi_gian_air) >= 10 and (thoi_gian_air[4] == '/' or thoi_gian_air[4] == '-'):
+                air_date_str = thoi_gian_air[:10].replace('-', '/')
+            # Check format DD/MM/YYYY
+            elif len(thoi_gian_air) >= 10 and thoi_gian_air[2] == '/':
+                parts = thoi_gian_air[:10].split('/')
+                if len(parts) == 3:
+                    air_date_str = f"{parts[2]}/{parts[1]}/{parts[0]}"
+        
+        if not air_date_str:
             continue
+            
+        # Compare dates
+        if air_date_str != target_date_str:
+            continue
+        
+        matched_count += 1
         
         # Lấy nhân sự
         nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
@@ -254,6 +292,7 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         elif "text" in content_type:
             result[nhan_su]["text"] += 1
     
+    print(f"📊 Matched records for {target_date_str}: {matched_count}")
     print(f"📊 Video air on {target_date_str}: {result}")
     return result
 
