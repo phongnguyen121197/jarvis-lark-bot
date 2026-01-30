@@ -204,7 +204,8 @@ async def get_table_records(
     table_id: str,
     filter_formula: Optional[str] = None,
     page_size: int = 100,
-    page_token: Optional[str] = None
+    page_token: Optional[str] = None,
+    sort: Optional[List[Dict]] = None
 ) -> Dict[str, Any]:
     """Lấy records từ Lark Base table"""
     token = await get_tenant_access_token()
@@ -220,6 +221,10 @@ async def get_table_records(
     
     if page_token:
         params["page_token"] = page_token
+    
+    if sort:
+        import json
+        params["sort"] = json.dumps(sort)
     
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -240,7 +245,8 @@ async def get_all_records(
     app_token: str,
     table_id: str,
     filter_formula: Optional[str] = None,
-    max_records: int = 2000
+    max_records: int = 2000,
+    sort: Optional[List[Dict]] = None
 ) -> List[Dict[str, Any]]:
     """Lấy tất cả records (với pagination)"""
     all_records = []
@@ -252,7 +258,8 @@ async def get_all_records(
             table_id=table_id,
             filter_formula=filter_formula,
             page_size=500,
-            page_token=page_token
+            page_token=page_token,
+            sort=sort
         )
         
         items = result.get("items", [])

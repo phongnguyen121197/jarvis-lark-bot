@@ -252,11 +252,18 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     print(f"📅 Getting video air for date: {target_date_str}")
     print(f"📅 Target timestamp range: {target_ts_start} - {target_ts_end}")
     
-    # Increase max_records to get more data
+    # Sort by "Thời gian air" descending to get newest records first
+    # This ensures we don't miss recent records if there are many old ones
+    sort_config = [
+        {"field_name": "Thời gian air", "desc": True}
+    ]
+    
+    # Increase max_records and sort to get recent data first
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
-        max_records=10000  # Increased to handle growing data
+        max_records=20000,  # Increased to handle growing data
+        sort=sort_config
     )
     
     print(f"📊 Total records from Booking: {len(records)}")
