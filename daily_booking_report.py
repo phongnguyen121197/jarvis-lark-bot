@@ -26,29 +26,43 @@ BOOKING_STAFF = {
     },
     "bbc7c22c": {
         "name": "Lê Thuỳ Dương",
-        "dashboard_names": ["Lê Thuỳ Dương", "Lê Thuỳ Dương (vịt)"],
+        "dashboard_names": [
+            "Lê Thuỳ Dương",
+            "Lê Thuỳ Dương (vịt)",
+            "Lê Thuỳ Dương (vịt) - PR Booking"  # Booking table
+        ],
         "short_name": "Dương"
     },
     "f987ca64": {
         "name": "Quân Nguyễn",
-        "dashboard_names": ["Quân Nguyễn - Booking Remote", "Quân Nguyễn"],
+        "dashboard_names": [
+            "Quân Nguyễn - Booking Remote",
+            "Quân Nguyễn"
+        ],
         "short_name": "Quân"
     },
     "29545d7g": {
         "name": "Châu Đặng",
-        "dashboard_names": ["Bảo Châu - Booking Remote", "Châu Đặng - Booking Remote", "Châu Đặng"],
+        "dashboard_names": [
+            "Bảo Châu - Booking Remote",
+            "Châu Đặng - Booking Remote",
+            "Châu Đặng"
+        ],
         "short_name": "Châu"
     },
     "2ccaca2e": {
         "name": "Huyền Trang",
-        "dashboard_names": ["Huyền Trang - Booking Kalle Remote", "Huyền Trang"],
+        "dashboard_names": [
+            "Huyền Trang - Booking Kalle Remote",
+            "Huyền Trang"
+        ],
         "short_name": "Trang"
     },
     "9g9634c2": {
         "name": "Phương Thảo",
         "dashboard_names": [
             "Phương Thảo - Intern Booking",
-            "Phương Thảo intern Booking", 
+            "Phương Thảo intern booking",  # Booking table (chữ i thường, không dấu -)
             "Phương Thảo Intern Booking",
             "Phương Thảo"
         ],
@@ -56,7 +70,10 @@ BOOKING_STAFF = {
     },
     "d2294g8g": {
         "name": "Trà Mi",
-        "dashboard_names": ["Trà Mi - Intern Booking", "Trà Mi"],
+        "dashboard_names": [
+            "Trà Mi - Intern Booking",
+            "Trà Mi"
+        ],
         "short_name": "Mi"
     },
 }
@@ -202,12 +219,14 @@ def normalize_staff_name_for_aggregation(raw_name: str) -> str:
         return raw_name
     
     raw_name = raw_name.strip()
+    raw_name_lower = raw_name.lower()
     
     # Tìm trong BOOKING_STAFF xem raw_name có match với dashboard_names không
     for user_id, staff_info in BOOKING_STAFF.items():
         dashboard_names = staff_info.get("dashboard_names", [])
         for db_name in dashboard_names:
-            if raw_name == db_name or raw_name.lower() == db_name.lower():
+            # Case-insensitive comparison
+            if raw_name_lower == db_name.lower():
                 # Trả về tên đầu tiên (chuẩn) trong dashboard_names
                 return dashboard_names[0]
     
@@ -335,10 +354,25 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         nhan_su_normalized = normalize_staff_name_for_aggregation(nhan_su)
         
         # Lấy loại content (Cart/Text/Video)
-        content_type = fields.get("Content") or "Video"
-        if isinstance(content_type, list) and len(content_type) > 0:
-            content_type = content_type[0] if isinstance(content_type[0], str) else content_type[0].get("text", "Video")
-        content_type = str(content_type).strip().lower() if content_type else "video"
+        content_raw = fields.get("Content")
+        content_type = "video"  # default
+        
+        if content_raw:
+            # Handle different formats from Lark Select/Option field
+            if isinstance(content_raw, str):
+                content_type = content_raw.strip().lower()
+            elif isinstance(content_raw, list) and len(content_raw) > 0:
+                first_item = content_raw[0]
+                if isinstance(first_item, str):
+                    content_type = first_item.strip().lower()
+                elif isinstance(first_item, dict):
+                    content_type = first_item.get("text", "video").strip().lower()
+            elif isinstance(content_raw, dict):
+                content_type = content_raw.get("text", "video").strip().lower()
+        
+        # Debug: Log content type for matched records
+        if matched_count <= 10:
+            print(f"   📝 Content debug: raw={content_raw}, parsed={content_type}")
         
         # Aggregate using normalized name
         if nhan_su_normalized not in result:
