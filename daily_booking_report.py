@@ -62,7 +62,8 @@ BOOKING_STAFF = {
         "name": "Phương Thảo",
         "dashboard_names": [
             "Phương Thảo - Intern Booking",
-            "Phương Thảo intern booking",  # Booking table (chữ i thường, không dấu -)
+            "Phương Thảo - Intern booking",  # Lark Base format (chữ b thường)
+            "Phương Thảo intern booking",
             "Phương Thảo Intern Booking",
             "Phương Thảo"
         ],
@@ -265,16 +266,27 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
         first_record_fields = records[0].get("fields", {})
         print(f"🔍 ALL field names in first record: {list(first_record_fields.keys())}")
         
-        # Find a record that has nhân sự = Phương Thảo or Châu Đặng
-        for r in records[:500]:
+        # Find ALL records of Thảo/Châu that have Link air bài
+        thao_chau_count = 0
+        for r in records:
             f = r.get("fields", {})
             nhan_su_raw = f.get("Nhân sự book")
-            if nhan_su_raw:
+            link_air = f.get("Link air bài")
+            thoi_gian_air = f.get("Thời gian air")
+            
+            if nhan_su_raw and link_air:
                 nhan_su_str = str(nhan_su_raw)
                 if "Thảo" in nhan_su_str or "Châu" in nhan_su_str:
-                    print(f"🔍 Found Thảo/Châu record - ALL fields: {list(f.keys())}")
-                    print(f"   📋 Full record data: {f}")
-                    break
+                    thao_chau_count += 1
+                    if thao_chau_count <= 5:  # Print first 5 records
+                        # Parse the date
+                        date_str = "N/A"
+                        if isinstance(thoi_gian_air, (int, float)) and thoi_gian_air > 0:
+                            ts = thoi_gian_air / 1000 if thoi_gian_air > 1e12 else thoi_gian_air
+                            date_str = datetime.fromtimestamp(ts).strftime("%Y/%m/%d")
+                        print(f"   🔍 Thảo/Châu record #{thao_chau_count}: Nhân sự={safe_extract_person_name(nhan_su_raw)}, Thời gian air={thoi_gian_air} ({date_str})")
+        
+        print(f"📊 Total Thảo/Châu records with Link air bài: {thao_chau_count}")
     
     result = {}
     debug_count = 0
