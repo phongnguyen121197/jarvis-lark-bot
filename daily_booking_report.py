@@ -252,21 +252,33 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     print(f"📅 Getting video air for date: {target_date_str}")
     print(f"📅 Target timestamp range: {target_ts_start} - {target_ts_end}")
     
-    # Sort by "Thời gian air" descending to get newest records first
-    # This ensures we don't miss recent records if there are many old ones
-    sort_config = [
-        {"field_name": "Thời gian air", "desc": True}
-    ]
-    
-    # Increase max_records and sort to get recent data first
+    # Get all records (without sort to avoid API error)
     records = await get_all_records(
         app_token=BOOKING_BASE["app_token"],
         table_id=BOOKING_BASE["table_id"],
-        max_records=20000,  # Increased to handle growing data
-        sort=sort_config
+        max_records=50000  # Increased significantly to ensure we get all records
     )
     
     print(f"📊 Total records from Booking: {len(records)}")
+    
+    # Debug: Count records with Thời gian air in January 2026
+    jan_2026_start = int(datetime(2026, 1, 1).timestamp() * 1000)
+    jan_2026_end = int(datetime(2026, 1, 31, 23, 59, 59).timestamp() * 1000)
+    jan_2026_records = 0
+    jan_2026_with_link = 0
+    
+    for r in records:
+        f = r.get("fields", {})
+        thoi_gian_air = f.get("Thời gian air")
+        link_air = f.get("Link air bài")
+        
+        if isinstance(thoi_gian_air, (int, float)) and jan_2026_start <= thoi_gian_air <= jan_2026_end:
+            jan_2026_records += 1
+            if link_air:
+                jan_2026_with_link += 1
+    
+    print(f"📊 Records with Thời gian air in Jan 2026: {jan_2026_records}")
+    print(f"📊 Records with Thời gian air in Jan 2026 AND Link air bài: {jan_2026_with_link}")
     
     # Debug: Print all field names from FIRST record (regardless of content)
     if records:
