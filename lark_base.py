@@ -8,8 +8,12 @@ import re
 import logging
 import httpx
 import aiohttp
+import pytz
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+
+# Vietnam timezone
+VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -1715,7 +1719,7 @@ async def get_dashboard_thang_records(month: Optional[int] = None, week: Optiona
     records = await get_all_records(
         app_token=DASHBOARD_THANG_TABLE["app_token"],
         table_id=DASHBOARD_THANG_TABLE["table_id"],
-        max_records=500
+        max_records=2000  # Increased from 500 to get all records
     )
     
     print(f"📊 Dashboard Tháng: Total records = {len(records)}, filter month = {month}")
@@ -1906,7 +1910,7 @@ async def generate_dashboard_summary(month: Optional[int] = None, week: Optional
         if thoi_gian_air:
             try:
                 if isinstance(thoi_gian_air, (int, float)):
-                    dt = datetime.fromtimestamp(thoi_gian_air / 1000)
+                    dt = datetime.fromtimestamp(thoi_gian_air / 1000, VN_TZ)
                     thang_air = dt.month
                 elif isinstance(thoi_gian_air, str):
                     for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:

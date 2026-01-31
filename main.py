@@ -729,14 +729,14 @@ async def startup_event():
         )
         print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM and 17:00 PM")
     
-    # Job 4: v5.7.25 - Daily Booking Report (9h hàng ngày)
+    # Job 4: v5.7.25 - Daily Booking Report (9h hàng ngày, kết thúc 14/2/2026)
     scheduler.add_job(
         send_daily_booking_reports,
-        CronTrigger(hour=9, minute=0, timezone=TIMEZONE),
+        CronTrigger(hour=9, minute=0, timezone=TIMEZONE, end_date="2026-02-14"),
         id="daily_booking_report",
         replace_existing=True
     )
-    print(f"📊 Daily Booking Report scheduled: Everyday at 9:00 AM")
+    print(f"📊 Daily Booking Report scheduled: Everyday at 9:00 AM (until 2026-02-14)")
         
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at 9:00 & 17:00 {TIMEZONE}")

@@ -86,6 +86,10 @@ BOOKING_STAFF = {
 # ============ CONFIG ============
 BOOKING_GROUP_CHAT_ID = "oc_7356c37c72891ea5314507d78ab2e937"  # Nhóm "Kalle - Booking k sếp"
 DAILY_KPI = 2  # KPI: 2 video/ngày
+DAILY_DEAL_KPI = 5  # KPI: 5 deal/ngày
+
+# Schedule end date (stop sending reports after this date)
+SCHEDULE_END_DATE = datetime(2026, 2, 14, 0, 0, 0, tzinfo=VN_TZ)
 
 # Lark API
 LARK_APP_ID = os.getenv("LARK_APP_ID")
@@ -463,7 +467,204 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     return result
 
 
-async def get_monthly_stats() -> Dict:
+async def get_deal_by_date(target_date: datetime) -> Dict[str, int]:
+    """
+    Đếm số deal theo ngày từ Booking table
+    Deal được tính khi record có đủ 3 cột:
+    1. Link social
+    2. Thông tin nhận hàng  
+    3. Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)
+    
+    Filter theo cột "Ngày deal (gần nhất)"
+    
+    Returns:
+        Dict[nhan_su_name, deal_count]
+    """
+    from lark_base import get_all_records, BOOKING_BASE, safe_extract_person_name
+    
+    target_date_str = target_date.strftime("%Y/%m/%d")
+    target_ts_start = int(target_date.replace(hour=0, minute=0, second=0).timestamp() * 1000)
+    target_ts_end = int(target_date.replace(hour=23, minute=59, second=59).timestamp() * 1000)
+    
+    print(f"📅 Getting deal count for date: {target_date_str}")
+    
+    # Get all records
+    records = await get_all_records(
+        app_token=BOOKING_BASE["app_token"],
+        table_id=BOOKING_BASE["table_id"],
+        max_records=50000
+    )
+    
+    # Debug: Print deal-related field names from first 3 records with data
+    debug_count = 0
+    for r in records:
+        f = r.get("fields", {})
+        deal_fields = {k: v for k, v in f.items() if "deal" in k.lower() or "ngày" in k.lower() or "nhận hàng" in k.lower() or "gửi hàng" in k.lower()}
+        if deal_fields and debug_count < 3:
+            print(f"   🔍 Deal fields in record: {list(deal_fields.keys())}")
+            debug_count += 1
+    
+    result = {}
+    matched_count = 0
+    
+    for record in records:
+        fields = record.get("fields", {})
+        
+        # Check 3 required fields
+        link_social = fields.get("Link social")
+        thong_tin_nhan_hang = fields.get("Thông tin nhận hàng")
+        phan_loai_sp_gh = fields.get("Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)")
+        
+        # All 3 fields must have value
+        if not link_social or not thong_tin_nhan_hang or not phan_loai_sp_gh:
+            continue
+        
+        # Get deal date - prioritize "Ngày deal"
+        ngay_deal = fields.get("Ngày deal") or fields.get("Ngày deal (gần nhất)")
+        if not ngay_deal:
+            continue
+        
+        # Parse date
+        deal_date_str = None
+        
+        if isinstance(ngay_deal, (int, float)):
+            try:
+                ts = ngay_deal / 1000 if ngay_deal > 1e12 else ngay_deal
+                dt = datetime.fromtimestamp(ts, VN_TZ)
+                deal_date_str = dt.strftime("%Y/%m/%d")
+            except:
+                continue
+        elif isinstance(ngay_deal, str):
+            ngay_deal = ngay_deal.strip()
+            if ngay_deal.isdigit():
+                try:
+                    ts = int(ngay_deal)
+                    ts = ts / 1000 if ts > 1e12 else ts
+                    dt = datetime.fromtimestamp(ts, VN_TZ)
+                    deal_date_str = dt.strftime("%Y/%m/%d")
+                except:
+                    pass
+            elif len(ngay_deal) >= 10 and (ngay_deal[4] == '/' or ngay_deal[4] == '-'):
+                deal_date_str = ngay_deal[:10].replace('-', '/')
+            elif len(ngay_deal) >= 10 and ngay_deal[2] == '/':
+                parts = ngay_deal[:10].split('/')
+                if len(parts) == 3:
+                    deal_date_str = f"{parts[2]}/{parts[1]}/{parts[0]}"
+        
+        if not deal_date_str or deal_date_str != target_date_str:
+            continue
+        
+        matched_count += 1
+        
+        # Get staff name
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+        if not nhan_su:
+            continue
+        nhan_su = nhan_su.strip()
+        
+        # Normalize name
+        nhan_su_normalized = normalize_staff_name_for_aggregation(nhan_su)
+        
+        if nhan_su_normalized not in result:
+            result[nhan_su_normalized] = 0
+        result[nhan_su_normalized] += 1
+    
+    print(f"📊 Deal count on {target_date_str}: {result}")
+    return result
+
+
+async def get_monthly_deal_stats(target_month: int) -> Dict[str, int]:
+    """
+    Đếm tổng số deal trong tháng (cộng dồn) theo nhân sự
+    
+    Returns:
+        Dict[nhan_su_name, total_deal_count_in_month]
+    """
+    from lark_base import get_all_records, BOOKING_BASE, safe_extract_person_name
+    
+    print(f"📅 Getting monthly deal stats for month: {target_month}")
+    
+    # Get all records
+    records = await get_all_records(
+        app_token=BOOKING_BASE["app_token"],
+        table_id=BOOKING_BASE["table_id"],
+        max_records=50000
+    )
+    
+    result = {}
+    matched_count = 0
+    
+    for record in records:
+        fields = record.get("fields", {})
+        
+        # Check 3 required fields
+        link_social = fields.get("Link social")
+        thong_tin_nhan_hang = fields.get("Thông tin nhận hàng")
+        phan_loai_sp_gh = fields.get("Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)")
+        
+        # All 3 fields must have value
+        if not link_social or not thong_tin_nhan_hang or not phan_loai_sp_gh:
+            continue
+        
+        # Get deal date - prioritize "Ngày deal"
+        ngay_deal = fields.get("Ngày deal") or fields.get("Ngày deal (gần nhất)")
+        if not ngay_deal:
+            continue
+        
+        # Parse month from deal date
+        deal_month = None
+        
+        if isinstance(ngay_deal, (int, float)):
+            try:
+                ts = ngay_deal / 1000 if ngay_deal > 1e12 else ngay_deal
+                dt = datetime.fromtimestamp(ts, VN_TZ)
+                deal_month = dt.month
+            except:
+                continue
+        elif isinstance(ngay_deal, str):
+            ngay_deal = ngay_deal.strip()
+            if ngay_deal.isdigit():
+                try:
+                    ts = int(ngay_deal)
+                    ts = ts / 1000 if ts > 1e12 else ts
+                    dt = datetime.fromtimestamp(ts, VN_TZ)
+                    deal_month = dt.month
+                except:
+                    pass
+            elif len(ngay_deal) >= 10 and (ngay_deal[4] == '/' or ngay_deal[4] == '-'):
+                # Format YYYY/MM/DD or YYYY-MM-DD
+                try:
+                    deal_month = int(ngay_deal[5:7])
+                except:
+                    pass
+            elif len(ngay_deal) >= 10 and ngay_deal[2] == '/':
+                # Format DD/MM/YYYY
+                try:
+                    deal_month = int(ngay_deal[3:5])
+                except:
+                    pass
+        
+        if deal_month != target_month:
+            continue
+        
+        matched_count += 1
+        
+        # Get staff name
+        nhan_su = safe_extract_person_name(fields.get("Nhân sự book"))
+        if not nhan_su:
+            continue
+        nhan_su = nhan_su.strip()
+        
+        # Normalize name
+        nhan_su_normalized = normalize_staff_name_for_aggregation(nhan_su)
+        
+        if nhan_su_normalized not in result:
+            result[nhan_su_normalized] = 0
+        result[nhan_su_normalized] += 1
+    
+    print(f"📊 Monthly deal stats (month {target_month}): {result}")
+    print(f"📊 Total matched deal records: {matched_count}")
+    return result
     """
     Lấy thống kê tháng hiện tại từ Dashboard
     """
@@ -539,11 +740,19 @@ def find_staff_data(staff_info: Dict, data_dict: Dict, monthly_list: List[Dict])
     return yesterday_stats, monthly_personal
 
 
-async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_data: Dict, monthly_stats: Dict) -> str:
+async def generate_personal_report(
+    user_id: str, 
+    staff_info: Dict, 
+    yesterday_data: Dict, 
+    monthly_stats: Dict,
+    yesterday_deal_data: Dict = None,
+    monthly_deal_data: Dict = None
+) -> str:
     """
     Tạo báo cáo cá nhân cho 1 nhân sự
     """
     name = staff_info["short_name"]
+    dashboard_names = staff_info["dashboard_names"]
     
     # Tìm data của nhân sự
     yesterday_stats, monthly_personal = find_staff_data(
@@ -552,7 +761,7 @@ async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_dat
         monthly_stats.get("staff_list", [])
     )
     
-    # Tính toán
+    # Tính toán video air
     yesterday = datetime.now(VN_TZ) - timedelta(days=1)
     today = datetime.now(VN_TZ)
     
@@ -560,15 +769,42 @@ async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_dat
     cart_yesterday = yesterday_stats["cart"]
     text_yesterday = yesterday_stats["text"]
     
-    # Logic B: Chỉ tính thiếu từ hôm qua
-    # Thiếu hôm qua = max(0, KPI - video_hôm_qua)
+    # Logic video: Chỉ tính thiếu từ hôm qua
     deficit_yesterday = max(0, DAILY_KPI - video_yesterday)
+    need_air_today = DAILY_KPI + deficit_yesterday
     
-    # Cần air hôm nay = KPI ngày + thiếu hôm qua
-    need_today = DAILY_KPI + deficit_yesterday
+    # Status emoji for video
+    video_status = "✅ Đạt KPI!" if video_yesterday >= DAILY_KPI else f"⚠️ Thiếu {deficit_yesterday} video"
     
-    # Status emoji
-    status = "✅ Đạt KPI!" if video_yesterday >= DAILY_KPI else f"⚠️ Thiếu {deficit_yesterday} video"
+    # Tính toán deal
+    deal_yesterday = 0
+    deal_month_total = 0
+    
+    if yesterday_deal_data:
+        for deal_name, count in yesterday_deal_data.items():
+            if match_staff_name(deal_name, dashboard_names):
+                deal_yesterday = count
+                break
+    
+    if monthly_deal_data:
+        for deal_name, count in monthly_deal_data.items():
+            if match_staff_name(deal_name, dashboard_names):
+                deal_month_total = count
+                break
+    
+    # Logic deal: Tính KPI deal theo ngày trong tháng
+    # Số ngày đã qua trong tháng (tính đến hôm qua)
+    days_passed = yesterday.day
+    expected_deal_by_yesterday = days_passed * DAILY_DEAL_KPI  # Tổng KPI deal tính đến hôm qua
+    
+    # Thiếu deal = max(0, expected - actual)
+    deal_deficit = max(0, expected_deal_by_yesterday - deal_month_total)
+    
+    # Cần deal hôm nay = KPI ngày + thiếu cộng dồn
+    need_deal_today = DAILY_DEAL_KPI + deal_deficit
+    
+    # Status emoji for deal
+    deal_status_emoji = "✅" if deal_yesterday >= DAILY_DEAL_KPI else "⚠️"
     
     # Format message
     message = f"""🔔 Chào {name}, báo cáo booking ngày {today.strftime('%d/%m')}:
@@ -576,10 +812,12 @@ async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_dat
 📊 HÔM QUA ({yesterday.strftime('%d/%m')}):
 • Đã air: {video_yesterday} video (KPI: {DAILY_KPI}/ngày)
 • Phân loại: {cart_yesterday} Cart, {text_yesterday} Text
-• {status}
+• {video_status}
+• Đã deal: {deal_yesterday}/{DAILY_DEAL_KPI} KOC {deal_status_emoji}
 
 📌 HÔM NAY ({today.strftime('%d/%m')}):
-• Cần air: {need_today} video ({DAILY_KPI} KPI + {deficit_yesterday} thiếu hôm qua)
+• Cần air: {need_air_today} video ({DAILY_KPI} KPI + {deficit_yesterday} thiếu hôm qua)
+• Cần deal: {need_deal_today} KOC ({DAILY_DEAL_KPI} KPI + {deal_deficit} thiếu cộng dồn)
 
 💪 Cố lên {name}!"""
     
@@ -639,18 +877,35 @@ async def send_daily_booking_reports():
     Main function: Gửi báo cáo hàng ngày
     1. Gửi thông báo cá nhân cho từng nhân sự
     2. Gửi báo cáo team vào nhóm
+    
+    Schedule: 9h00 sáng hàng ngày, kết thúc 14/2/2026
     """
+    now = datetime.now(VN_TZ)
+    
     print(f"\n{'='*50}")
-    print(f"📊 Starting daily booking reports at {datetime.now(VN_TZ)}")
+    print(f"📊 Starting daily booking reports at {now}")
     print(f"{'='*50}")
+    
+    # Check if schedule has ended
+    if now >= SCHEDULE_END_DATE:
+        print(f"⏰ Schedule ended. Current: {now}, End date: {SCHEDULE_END_DATE}")
+        print("📊 Daily booking reports are no longer scheduled.")
+        return
     
     try:
         # Lấy data - use Vietnam timezone
-        yesterday = datetime.now(VN_TZ) - timedelta(days=1)
+        yesterday = now - timedelta(days=1)
+        current_month = now.month
         print(f"📅 Getting data for yesterday: {yesterday.strftime('%Y/%m/%d')}")
         
+        # Get video air data
         yesterday_data = await get_video_air_by_date(yesterday)
         monthly_stats = await get_monthly_stats()
+        
+        # Get deal data
+        print(f"📅 Getting deal data...")
+        yesterday_deal_data = await get_deal_by_date(yesterday)
+        monthly_deal_data = await get_monthly_deal_stats(current_month)
         
         if not monthly_stats:
             print("❌ Failed to get monthly stats, aborting...")
@@ -661,7 +916,14 @@ async def send_daily_booking_reports():
         success_count = 0
         for user_id, staff_info in BOOKING_STAFF.items():
             try:
-                message = await generate_personal_report(user_id, staff_info, yesterday_data, monthly_stats)
+                message = await generate_personal_report(
+                    user_id, 
+                    staff_info, 
+                    yesterday_data, 
+                    monthly_stats,
+                    yesterday_deal_data,
+                    monthly_deal_data
+                )
                 result = await send_message_to_user(user_id, message)
                 if result:
                     success_count += 1
