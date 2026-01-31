@@ -9,6 +9,10 @@ Features:
 
 import os
 from datetime import datetime, timedelta
+import pytz
+
+# Vietnam timezone
+VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 from typing import Dict, List, Optional
 import httpx
 
@@ -266,6 +270,7 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
     jan_2026_end = int(datetime(2026, 1, 31, 23, 59, 59).timestamp() * 1000)
     jan_2026_records = 0
     jan_2026_with_link = 0
+    sample_timestamps = []
     
     for r in records:
         f = r.get("fields", {})
@@ -276,9 +281,16 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
             jan_2026_records += 1
             if link_air:
                 jan_2026_with_link += 1
+                # Collect sample timestamps (first 10)
+                if len(sample_timestamps) < 10:
+                    ts = thoi_gian_air / 1000 if thoi_gian_air > 1e12 else thoi_gian_air
+                    date_str = datetime.fromtimestamp(ts, VN_TZ).strftime("%Y/%m/%d %H:%M:%S")
+                    sample_timestamps.append(f"{thoi_gian_air} ({date_str})")
     
     print(f"📊 Records with Thời gian air in Jan 2026: {jan_2026_records}")
     print(f"📊 Records with Thời gian air in Jan 2026 AND Link air bài: {jan_2026_with_link}")
+    print(f"📊 Sample timestamps from Jan 2026: {sample_timestamps}")
+    print(f"📊 Target range: {target_ts_start} - {target_ts_end}")
     
     # Debug: Print all field names from FIRST record (regardless of content)
     if records:
@@ -302,7 +314,7 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
                         date_str = "N/A"
                         if isinstance(thoi_gian_air, (int, float)) and thoi_gian_air > 0:
                             ts = thoi_gian_air / 1000 if thoi_gian_air > 1e12 else thoi_gian_air
-                            date_str = datetime.fromtimestamp(ts).strftime("%Y/%m/%d")
+                            date_str = datetime.fromtimestamp(ts, VN_TZ).strftime("%Y/%m/%d")
                         print(f"   🔍 Thảo/Châu record #{thao_chau_count}: Nhân sự={safe_extract_person_name(nhan_su_raw)}, Thời gian air={thoi_gian_air} ({date_str})")
         
         print(f"📊 Total Thảo/Châu records with Link air bài: {thao_chau_count}")
@@ -339,7 +351,8 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
             try:
                 # Convert milliseconds to seconds
                 ts = thoi_gian_air / 1000 if thoi_gian_air > 1e12 else thoi_gian_air
-                dt = datetime.fromtimestamp(ts)
+                # Use Vietnam timezone for conversion
+                dt = datetime.fromtimestamp(ts, VN_TZ)
                 air_date_str = dt.strftime("%Y/%m/%d")
                 
                 # Debug: Check if timestamp is in target range
@@ -360,7 +373,7 @@ async def get_video_air_by_date(target_date: datetime) -> Dict[str, Dict]:
                 try:
                     ts = int(thoi_gian_air)
                     ts = ts / 1000 if ts > 1e12 else ts
-                    dt = datetime.fromtimestamp(ts)
+                    dt = datetime.fromtimestamp(ts, VN_TZ)
                     air_date_str = dt.strftime("%Y/%m/%d")
                 except:
                     pass
@@ -456,7 +469,7 @@ async def get_monthly_stats() -> Dict:
     """
     from lark_base import generate_dashboard_summary
     
-    now = datetime.now()
+    now = datetime.now(VN_TZ)
     month = now.month
     
     print(f"📊 Getting monthly stats for month {month}...")
@@ -540,8 +553,8 @@ async def generate_personal_report(user_id: str, staff_info: Dict, yesterday_dat
     )
     
     # Tính toán
-    yesterday = datetime.now() - timedelta(days=1)
-    today = datetime.now()
+    yesterday = datetime.now(VN_TZ) - timedelta(days=1)
+    today = datetime.now(VN_TZ)
     
     video_yesterday = yesterday_stats["count"]
     cart_yesterday = yesterday_stats["cart"]
@@ -586,7 +599,7 @@ async def generate_team_report(monthly_stats: Dict) -> str:
     total_percent = monthly_stats["total_percent"]
     staff_list = monthly_stats["staff_list"]
     
-    today = datetime.now()
+    today = datetime.now(VN_TZ)
     
     # Sort staff by percent descending
     sorted_staff = sorted(staff_list, key=lambda x: x.get("video_percent", 0), reverse=True)
@@ -628,12 +641,12 @@ async def send_daily_booking_reports():
     2. Gửi báo cáo team vào nhóm
     """
     print(f"\n{'='*50}")
-    print(f"📊 Starting daily booking reports at {datetime.now()}")
+    print(f"📊 Starting daily booking reports at {datetime.now(VN_TZ)}")
     print(f"{'='*50}")
     
     try:
-        # Lấy data
-        yesterday = datetime.now() - timedelta(days=1)
+        # Lấy data - use Vietnam timezone
+        yesterday = datetime.now(VN_TZ) - timedelta(days=1)
         print(f"📅 Getting data for yesterday: {yesterday.strftime('%Y/%m/%d')}")
         
         yesterday_data = await get_video_air_by_date(yesterday)
@@ -673,7 +686,7 @@ async def send_daily_booking_reports():
             print(f"   ❌ Team report error: {e}")
         
         print(f"\n{'='*50}")
-        print(f"📊 Daily booking reports completed at {datetime.now()}")
+        print(f"📊 Daily booking reports completed at {datetime.now(VN_TZ)}")
         print(f"{'='*50}\n")
         
     except Exception as e:
