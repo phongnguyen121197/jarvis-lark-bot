@@ -495,14 +495,26 @@ async def get_deal_by_date(target_date: datetime) -> Dict[str, int]:
         max_records=50000
     )
     
-    # Debug: Print deal-related field names from first 3 records with data
+    # Debug: Find and print records that have "Ngày deal" field
     debug_count = 0
+    records_with_ngay_deal = 0
     for r in records:
         f = r.get("fields", {})
-        deal_fields = {k: v for k, v in f.items() if "deal" in k.lower() or "ngày" in k.lower() or "nhận hàng" in k.lower() or "gửi hàng" in k.lower()}
-        if deal_fields and debug_count < 3:
-            print(f"   🔍 Deal fields in record: {list(deal_fields.keys())}")
-            debug_count += 1
+        ngay_deal = f.get("Ngày deal")
+        if ngay_deal:
+            records_with_ngay_deal += 1
+            if debug_count < 3:
+                # Print all fields of this record to see what's available
+                print(f"   🔍 Record with Ngày deal:")
+                print(f"      - Ngày deal: {ngay_deal}")
+                print(f"      - Nhân sự book: {f.get('Nhân sự book')}")
+                print(f"      - Link social: {f.get('Link social')}")
+                print(f"      - Thông tin nhận hàng: {f.get('Thông tin nhận hàng')}")
+                print(f"      - Phân loại sp gửi hàng: {f.get('Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)')}")
+                print(f"      - ALL FIELDS: {list(f.keys())}")
+                debug_count += 1
+    
+    print(f"📊 Total records with 'Ngày deal': {records_with_ngay_deal}/{len(records)}")
     
     result = {}
     matched_count = 0
