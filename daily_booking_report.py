@@ -665,6 +665,9 @@ async def get_monthly_deal_stats(target_month: int) -> Dict[str, int]:
     print(f"📊 Monthly deal stats (month {target_month}): {result}")
     print(f"📊 Total matched deal records: {matched_count}")
     return result
+
+
+async def get_monthly_stats() -> Optional[Dict]:
     """
     Lấy thống kê tháng hiện tại từ Dashboard
     """
