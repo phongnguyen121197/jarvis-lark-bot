@@ -504,14 +504,11 @@ async def get_deal_by_date(target_date: datetime) -> Dict[str, int]:
         if ngay_deal:
             records_with_ngay_deal += 1
             if debug_count < 3:
-                # Print all fields of this record to see what's available
                 print(f"   🔍 Record with Ngày deal:")
                 print(f"      - Ngày deal: {ngay_deal}")
                 print(f"      - Nhân sự book: {f.get('Nhân sự book')}")
                 print(f"      - Link social: {f.get('Link social')}")
-                print(f"      - Thông tin nhận hàng: {f.get('Thông tin nhận hàng')}")
-                print(f"      - Phân loại sp gửi hàng: {f.get('Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)')}")
-                print(f"      - ALL FIELDS: {list(f.keys())}")
+                print(f"      - Phân loại sp: {f.get('Phân loại sp (Chỉ được chọn - Không được add mới)')}")
                 debug_count += 1
     
     print(f"📊 Total records with 'Ngày deal': {records_with_ngay_deal}/{len(records)}")
@@ -522,13 +519,12 @@ async def get_deal_by_date(target_date: datetime) -> Dict[str, int]:
     for record in records:
         fields = record.get("fields", {})
         
-        # Check 3 required fields
+        # Check 2 required fields (Option B: Link social + Phân loại sp)
         link_social = fields.get("Link social")
-        thong_tin_nhan_hang = fields.get("Thông tin nhận hàng")
-        phan_loai_sp_gh = fields.get("Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)")
+        phan_loai_sp = fields.get("Phân loại sp (Chỉ được chọn - Không được add mới)")
         
-        # All 3 fields must have value
-        if not link_social or not thong_tin_nhan_hang or not phan_loai_sp_gh:
+        # Both fields must have value
+        if not link_social or not phan_loai_sp:
             continue
         
         # Get deal date - prioritize "Ngày deal"
@@ -609,13 +605,12 @@ async def get_monthly_deal_stats(target_month: int) -> Dict[str, int]:
     for record in records:
         fields = record.get("fields", {})
         
-        # Check 3 required fields
+        # Check 2 required fields (Option B: Link social + Phân loại sp)
         link_social = fields.get("Link social")
-        thong_tin_nhan_hang = fields.get("Thông tin nhận hàng")
-        phan_loai_sp_gh = fields.get("Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới)")
+        phan_loai_sp = fields.get("Phân loại sp (Chỉ được chọn - Không được add mới)")
         
-        # All 3 fields must have value
-        if not link_social or not thong_tin_nhan_hang or not phan_loai_sp_gh:
+        # Both fields must have value
+        if not link_social or not phan_loai_sp:
             continue
         
         # Get deal date - prioritize "Ngày deal"

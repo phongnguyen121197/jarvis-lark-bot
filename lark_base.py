@@ -230,20 +230,57 @@ async def get_table_records(
         import json
         params["sort"] = json.dumps(sort)
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
-            timeout=30.0
-        )
-        data = response.json()
-        
-        if data.get("code") == 0:
-            return data.get("data", {})
-        else:
-            print(f"❌ Lark Base API Error: {data}")
-            raise Exception(f"Lark Base API Error: {data.get('msg')}")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                    timeout=30.0
+                )
+                data = response.json()
+                
+                if data.get("code") == 0:
+                    return data.get("data", {})
+                
+                error_code = data.get("code")
+                
+                # Token expired - refresh and retry
+                if error_code in (99991661, 99991663, 99991668):
+                    print(f"⚠️ Token expired (code={error_code}), refreshing...")
+                    _token_cache["token"] = None
+                    _token_cache["expires_at"] = None
+                    token = await get_tenant_access_token()
+                    continue
+                
+                # Server-side errors - retry with backoff
+                if error_code in (1254002, 1254003, 1254004) or error_code >= 500000:
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 3  # 3s, 6s, 9s
+                        print(f"⚠️ Lark API error (code={error_code}), retry {attempt+1}/{max_retries} after {wait_time}s...")
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                        # Refresh token on retry
+                        _token_cache["token"] = None
+                        _token_cache["expires_at"] = None
+                        token = await get_tenant_access_token()
+                        continue
+                
+                print(f"❌ Lark Base API Error: {data}")
+                raise Exception(f"Lark Base API Error: {data.get('msg')}")
+                
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 3
+                print(f"⚠️ Request timeout, retry {attempt+1}/{max_retries} after {wait_time}s...")
+                import asyncio
+                await asyncio.sleep(wait_time)
+                continue
+            raise Exception("Lark Base API Timeout after retries")
+    
+    raise Exception(f"Lark Base API Error after {max_retries} retries")
 
 async def get_all_records(
     app_token: str,
