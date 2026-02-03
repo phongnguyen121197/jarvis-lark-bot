@@ -24,7 +24,7 @@ SEEDING_WEBHOOK_URL = os.getenv("SEEDING_WEBHOOK_URL", "")
 
 async def get_tiktok_thumbnail(tiktok_url: str) -> Optional[str]:
     """
-    Crawl thumbnail từ TikTok URL
+    Lấy thumbnail từ TikTok URL sử dụng các API không chính thức
     
     Args:
         tiktok_url: URL video TikTok
@@ -34,47 +34,115 @@ async def get_tiktok_thumbnail(tiktok_url: str) -> Optional[str]:
     """
     if not tiktok_url:
         return None
-        
+    
+    # Extract video ID từ URL
+    video_id = None
+    if '/video/' in tiktok_url:
+        video_id = tiktok_url.split('/video/')[1].split('?')[0].split('/')[0]
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.tiktok.com/",
+    }
+    
+    # ===== METHOD 1: TikWM API =====
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-        }
+        print(f"🔍 Trying TikWM API...")
+        tikwm_url = f"https://www.tikwm.com/api/?url={tiktok_url}"
         
         async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
-            response = await client.get(tiktok_url, headers=headers)
+            response = await client.get(tikwm_url, headers=headers)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0 and data.get("data"):
+                    video_data = data["data"]
+                    # Thử các field khác nhau
+                    thumbnail = (
+                        video_data.get("cover") or
+                        video_data.get("origin_cover") or
+                        video_data.get("ai_dynamic_cover") or
+                        video_data.get("dynamic_cover")
+                    )
+                    if thumbnail:
+                        print(f"✅ Got thumbnail via TikWM: {thumbnail[:80]}...")
+                        return thumbnail
+    except Exception as e:
+        print(f"⚠️ TikWM API failed: {e}")
+    
+    # ===== METHOD 2: TikTok oEmbed API (official backup) =====
+    try:
+        print(f"🔍 Trying TikTok oEmbed API...")
+        oembed_url = f"https://www.tiktok.com/oembed?url={tiktok_url}"
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            response = await client.get(oembed_url, headers=headers)
+            
+            if response.status_code == 200:
+                data = response.json()
+                thumbnail_url = data.get("thumbnail_url")
+                if thumbnail_url:
+                    print(f"✅ Got thumbnail via oEmbed: {thumbnail_url[:80]}...")
+                    return thumbnail_url
+    except Exception as e:
+        print(f"⚠️ oEmbed API failed: {e}")
+    
+    # ===== METHOD 3: Direct TikTok API (nếu có video_id) =====
+    if video_id:
+        try:
+            print(f"🔍 Trying direct TikTok API with video_id: {video_id}")
+            api_url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id={video_id}"
+            
+            async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+                response = await client.get(api_url, headers={
+                    "User-Agent": "com.zhiliaoapp.musically/2022600030 (Linux; U; Android 12; en_US; Pixel 6; Build/SD1A.210817.023;tt-ok/3.12.13.1)",
+                })
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    aweme_list = data.get("aweme_list", [])
+                    if aweme_list:
+                        video = aweme_list[0]
+                        cover = video.get("video", {}).get("cover", {})
+                        url_list = cover.get("url_list", [])
+                        if url_list:
+                            thumbnail = url_list[0]
+                            print(f"✅ Got thumbnail via TikTok API: {thumbnail[:80]}...")
+                            return thumbnail
+        except Exception as e:
+            print(f"⚠️ Direct TikTok API failed: {e}")
+    
+    # ===== METHOD 4: Scrape HTML =====
+    try:
+        print(f"🔍 Trying HTML scrape...")
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            response = await client.get(tiktok_url, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Accept": "text/html",
+            })
             html = response.text
             
-            # Các patterns để tìm thumbnail trong TikTok HTML
             patterns = [
-                r'<meta property="og:image" content="([^"]+)"',
-                r'"thumbnail":\s*\{\s*"url_list":\s*\[\s*"([^"]+)"',
                 r'"cover":\s*"([^"]+)"',
                 r'"originCover":\s*"([^"]+)"',
-                r'"dynamicCover":\s*"([^"]+)"',
-                r'"thumbnail_url":\s*"([^"]+)"',
+                r'"thumbnail":\s*\{\s*"url_list":\s*\[\s*"([^"]+)"',
+                r'<meta property="og:image" content="([^"]+)"',
             ]
             
             for pattern in patterns:
                 match = re.search(pattern, html)
                 if match:
-                    thumbnail_url = match.group(1)
-                    # Unescape URL characters
-                    thumbnail_url = thumbnail_url.replace("\\u002F", "/")
-                    thumbnail_url = thumbnail_url.replace("\\u0026", "&")
-                    thumbnail_url = thumbnail_url.replace("\\/", "/")
-                    print(f"✅ Found TikTok thumbnail: {thumbnail_url[:80]}...")
-                    return thumbnail_url
-            
-            print(f"⚠️ No thumbnail found for: {tiktok_url}")
-            return None
-            
+                    thumbnail = match.group(1)
+                    thumbnail = thumbnail.replace("\\u002F", "/").replace("\\u0026", "&").replace("\\/", "/")
+                    if thumbnail.startswith("http"):
+                        print(f"✅ Got thumbnail via HTML scrape: {thumbnail[:80]}...")
+                        return thumbnail
     except Exception as e:
-        print(f"❌ Error crawling TikTok thumbnail: {e}")
-        return None
+        print(f"⚠️ HTML scrape failed: {e}")
+    
+    print(f"❌ All methods failed for: {tiktok_url}")
+    return None
 
 
 # ============ LARK IMAGE UPLOAD ============
