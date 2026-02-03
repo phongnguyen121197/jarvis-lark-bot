@@ -877,7 +877,7 @@ async def handle_seeding_webhook(request: Request):
         if not SEEDING_WEBHOOK_URL and not GAP_2H_CHAT_ID:
             return {"success": False, "error": "Missing SEEDING_WEBHOOK_URL or GAP_2H_CHAT_ID environment variable"}
         
-        # Gửi notification (ưu tiên webhook nếu có)
+        # Gửi notification (với thumbnail)
         result = await send_seeding_notification(
             koc_name=koc_name,
             channel_id=channel_id,
@@ -887,7 +887,7 @@ async def handle_seeding_webhook(request: Request):
             webhook_url=SEEDING_WEBHOOK_URL,
             chat_id=GAP_2H_CHAT_ID,
             record_url=record_url,
-            with_thumbnail=False  # Webhook không hỗ trợ upload image
+            with_thumbnail=True  # Bật thumbnail - crawl từ TikTok và upload lên Lark
         )
         
         return result
@@ -907,7 +907,7 @@ async def test_seeding_card(
     product: str = "Box quà YÊU - Ủ+Xịt+Tinh dầu"
 ):
     """
-    Endpoint test gửi seeding card
+    Endpoint test gửi seeding card với thumbnail
     Dùng để test trước khi setup automation
     """
     if not SEEDING_WEBHOOK_URL and not GAP_2H_CHAT_ID:
@@ -921,11 +921,11 @@ async def test_seeding_card(
         channel_id=channel_id,
         tiktok_url=tiktok_url,
         product=product,
-        get_token_func=get_tenant_access_token,
+        get_token_func=get_tenant_access_token,  # Cần để upload thumbnail
         webhook_url=SEEDING_WEBHOOK_URL,
         chat_id=GAP_2H_CHAT_ID,
         record_url=None,
-        with_thumbnail=False  # Webhook không hỗ trợ upload image
+        with_thumbnail=True  # Bật thumbnail
     )
     
     return result
@@ -951,10 +951,11 @@ async def send_seeding_manual(
     tiktok_url: str,
     product: str,
     record_url: str = None,
-    webhook_url: str = None
+    webhook_url: str = None,
+    with_thumbnail: bool = True
 ):
     """
-    API gửi seeding card thủ công
+    API gửi seeding card thủ công với thumbnail
     Có thể chỉ định webhook_url khác nếu cần
     """
     target_webhook = webhook_url or SEEDING_WEBHOOK_URL
@@ -969,7 +970,7 @@ async def send_seeding_manual(
         get_token_func=get_tenant_access_token,
         webhook_url=target_webhook,
         record_url=record_url,
-        with_thumbnail=False
+        with_thumbnail=with_thumbnail
     )
     
     return result

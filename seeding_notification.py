@@ -164,7 +164,7 @@ async def send_seeding_card_via_webhook(
     channel_id: str,
     tiktok_url: str,
     product: str,
-    thumbnail_url: Optional[str] = None,
+    image_key: Optional[str] = None,
     record_url: Optional[str] = None,
     title: str = "🔥 SOS VIDEO ĐÃ AIR SEEDING GẤP",
     header_color: str = "red"
@@ -178,7 +178,7 @@ async def send_seeding_card_via_webhook(
         channel_id: ID kênh TikTok
         tiktok_url: Link video TikTok
         product: Tên sản phẩm
-        thumbnail_url: URL thumbnail (sẽ thử hiển thị, có thể không hoạt động)
+        image_key: Image key từ Lark (đã upload qua API)
         record_url: Link đến bản ghi trong Lark Base
         title: Tiêu đề card
         header_color: Màu header
@@ -193,6 +193,19 @@ async def send_seeding_card_via_webhook(
     try:
         # Tạo card elements
         elements = []
+        
+        # Thêm thumbnail nếu có image_key
+        if image_key:
+            elements.append({
+                "tag": "img",
+                "img_key": image_key,
+                "alt": {
+                    "tag": "plain_text",
+                    "content": "Video thumbnail"
+                },
+                "mode": "fit_horizontal",
+                "preview": True
+            })
         
         # Thông tin chi tiết
         info_parts = []
@@ -212,7 +225,7 @@ async def send_seeding_card_via_webhook(
                 }
             })
         
-        # Link video (hiển thị dạng text để Lark có thể unfurl)
+        # Link video (hiển thị dạng text)
         if tiktok_url:
             elements.append({
                 "tag": "div",
@@ -481,18 +494,20 @@ async def send_seeding_notification(
     title: str = "🔥 SOS VIDEO ĐÃ AIR SEEDING GẤP"
 ) -> dict:
     """
-    Function chính: Crawl thumbnail + Gửi card
+    Function chính: Crawl thumbnail + Upload lên Lark + Gửi card
     
     Hỗ trợ 2 cách gửi:
     1. Qua Webhook URL (cho external groups) - ưu tiên nếu có webhook_url
     2. Qua Lark API (cần chat_id + get_token_func)
+    
+    Cả 2 cách đều hỗ trợ thumbnail nếu có get_token_func
     
     Args:
         koc_name: Tên KOC
         channel_id: ID kênh TikTok  
         tiktok_url: Link video TikTok
         product: Tên sản phẩm
-        get_token_func: Async function để lấy tenant_access_token (cho API)
+        get_token_func: Async function để lấy tenant_access_token (bắt buộc cho thumbnail)
         chat_id: ID của chat/nhóm Lark (cho API)
         webhook_url: Webhook URL của Custom Bot (cho external groups)
         record_url: Link đến bản ghi trong Lark Base (optional)
@@ -536,24 +551,27 @@ async def send_seeding_notification(
         if thumbnail_url:
             result["thumbnail_crawled"] = True
             
-            # Step 2: Upload thumbnail lên Lark (chỉ khi dùng API method)
-            if not use_webhook and get_token_func:
+            # Step 2: Upload thumbnail lên Lark (cần get_token_func)
+            if get_token_func:
                 print(f"📤 Uploading thumbnail to Lark...")
                 image_key = await upload_image_to_lark(thumbnail_url, get_token_func)
                 if image_key:
                     result["thumbnail_uploaded"] = True
+                    print(f"✅ Got image_key: {image_key}")
+            else:
+                print(f"⚠️ No get_token_func provided, skipping thumbnail upload")
     
     # Step 3: Gửi Message Card
     try:
         if use_webhook:
-            # Gửi qua Webhook
+            # Gửi qua Webhook (với image_key nếu có)
             card_sent = await send_seeding_card_via_webhook(
                 webhook_url=target_webhook,
                 koc_name=koc_name,
                 channel_id=channel_id,
                 tiktok_url=tiktok_url,
                 product=product,
-                thumbnail_url=thumbnail_url,
+                image_key=image_key,
                 record_url=record_url,
                 title=title
             )
