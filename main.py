@@ -39,6 +39,13 @@ from lark_base import generate_koc_summary, generate_content_calendar, generate_
 from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, generate_cheng_report_text
 from notes_manager import check_note_command, handle_note_command, get_notes_manager
 from daily_booking_report import send_daily_booking_reports, BOOKING_GROUP_CHAT_ID
+from seeding_notification import (
+    get_tiktok_thumbnail,
+    upload_image_to_lark,
+    send_seeding_card,
+    send_seeding_notification,
+    GAP_2H_CHAT_ID
+)
 
 # ============ SCHEDULER CONFIG ============
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
@@ -779,6 +786,188 @@ async def test_daily_booking():
         return {"status": "ok", "message": "Daily booking reports sent"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ============ SEEDING NOTIFICATION ENDPOINTS ============
+
+@app.post("/webhook/seeding")
+async def handle_seeding_webhook(request: Request):
+    """
+    Webhook nhận thông báo từ Lark Base Automation
+    Khi có record mới/cập nhật trong Base → trigger webhook này
+    
+    Expected JSON body:
+    {
+        "koc_name": "Tên KOC",
+        "channel_id": "ID kênh",
+        "tiktok_url": "https://tiktok.com/...",
+        "product": "Tên sản phẩm",
+        "record_url": "Link bản ghi" (optional)
+    }
+    """
+    try:
+        body = await request.json()
+        print(f"📩 Seeding webhook received: {json.dumps(body, indent=2, ensure_ascii=False)}")
+        
+        # Parse data - hỗ trợ nhiều format field name khác nhau
+        data = body
+        
+        koc_name = (
+            data.get("koc_name") or 
+            data.get("Tên KOC") or 
+            data.get("ten_koc") or 
+            data.get("Tên KOC/Influencer") or
+            ""
+        )
+        
+        channel_id = (
+            data.get("channel_id") or 
+            data.get("ID kênh") or 
+            data.get("id_kenh") or 
+            ""
+        )
+        
+        tiktok_url = (
+            data.get("tiktok_url") or 
+            data.get("Link air video") or 
+            data.get("link_air_video") or 
+            data.get("Link air bài") or
+            data.get("link_air_bai") or
+            ""
+        )
+        
+        product = (
+            data.get("product") or 
+            data.get("Sản phẩm") or 
+            data.get("san_pham") or 
+            data.get("Tên sản phẩm") or
+            ""
+        )
+        
+        # Phân loại sản phẩm (optional - append vào product nếu có)
+        product_type = (
+            data.get("product_type") or
+            data.get("Phân loại sản phẩm") or
+            data.get("Phân loại sp") or
+            data.get("phan_loai_sp") or
+            ""
+        )
+        
+        if product_type and product:
+            product = f"{product} - {product_type}"
+        elif product_type:
+            product = product_type
+        
+        record_url = (
+            data.get("record_url") or 
+            data.get("Link bản ghi") or 
+            data.get("link_ban_ghi") or 
+            None
+        )
+        
+        # Validate
+        if not tiktok_url:
+            return {"success": False, "error": "Missing tiktok_url"}
+        
+        # Check chat_id
+        chat_id = GAP_2H_CHAT_ID
+        if not chat_id:
+            return {"success": False, "error": "Missing GAP_2H_CHAT_ID environment variable"}
+        
+        # Gửi notification
+        result = await send_seeding_notification(
+            chat_id=chat_id,
+            koc_name=koc_name,
+            channel_id=channel_id,
+            tiktok_url=tiktok_url,
+            product=product,
+            get_token_func=get_tenant_access_token,
+            record_url=record_url,
+            with_thumbnail=True
+        )
+        
+        return result
+        
+    except Exception as e:
+        import traceback
+        print(f"❌ Seeding webhook error: {e}")
+        print(traceback.format_exc())
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/test/seeding-card")
+async def test_seeding_card(
+    tiktok_url: str = "https://www.tiktok.com/@hainguoiiunhau9/video/7602154659691777288",
+    koc_name: str = "Hai người yêu nhau 💕",
+    channel_id: str = "hainguoiiunhau9",
+    product: str = "Box quà YÊU - Ủ+Xịt+Tinh dầu",
+    with_thumbnail: bool = True
+):
+    """
+    Endpoint test gửi seeding card
+    Dùng để test trước khi setup automation
+    """
+    chat_id = GAP_2H_CHAT_ID
+    if not chat_id:
+        return {"success": False, "error": "Missing GAP_2H_CHAT_ID environment variable. Please set it in Railway."}
+    
+    result = await send_seeding_notification(
+        chat_id=chat_id,
+        koc_name=koc_name,
+        channel_id=channel_id,
+        tiktok_url=tiktok_url,
+        product=product,
+        get_token_func=get_tenant_access_token,
+        record_url=None,
+        with_thumbnail=with_thumbnail
+    )
+    
+    return result
+
+
+@app.get("/test/tiktok-thumbnail")
+async def test_tiktok_thumbnail(
+    url: str = "https://www.tiktok.com/@hainguoiiunhau9/video/7602154659691777288"
+):
+    """Test crawl thumbnail từ TikTok URL"""
+    thumbnail = await get_tiktok_thumbnail(url)
+    return {
+        "tiktok_url": url,
+        "thumbnail_url": thumbnail,
+        "success": thumbnail is not None
+    }
+
+
+@app.post("/send/seeding")
+async def send_seeding_manual(
+    koc_name: str,
+    channel_id: str,
+    tiktok_url: str,
+    product: str,
+    record_url: str = None,
+    with_thumbnail: bool = True,
+    chat_id: str = None
+):
+    """
+    API gửi seeding card thủ công
+    Có thể chỉ định chat_id khác nếu cần
+    """
+    target_chat_id = chat_id or GAP_2H_CHAT_ID
+    if not target_chat_id:
+        return {"success": False, "error": "Missing chat_id"}
+    
+    result = await send_seeding_notification(
+        chat_id=target_chat_id,
+        koc_name=koc_name,
+        channel_id=channel_id,
+        tiktok_url=tiktok_url,
+        product=product,
+        get_token_func=get_tenant_access_token,
+        record_url=record_url,
+        with_thumbnail=with_thumbnail
+    )
+    
+    return result
 
 
 if __name__ == "__main__":

@@ -764,12 +764,23 @@ async def generate_personal_report(
     name = staff_info["short_name"]
     dashboard_names = staff_info["dashboard_names"]
     
+    # Debug: Log all keys in yesterday_data
+    if name == "Châu":
+        print(f"   🔍 DEBUG Châu - yesterday_data keys: {list(yesterday_data.keys())}")
+        print(f"   🔍 DEBUG Châu - dashboard_names: {dashboard_names}")
+        if yesterday_deal_data:
+            print(f"   🔍 DEBUG Châu - yesterday_deal_data keys: {list(yesterday_deal_data.keys())}")
+    
     # Tìm data của nhân sự
     yesterday_stats, monthly_personal = find_staff_data(
         staff_info, 
         yesterday_data, 
         monthly_stats.get("staff_list", [])
     )
+    
+    # Debug: Log matched stats
+    if name == "Châu":
+        print(f"   🔍 DEBUG Châu - matched yesterday_stats: {yesterday_stats}")
     
     # Tính toán video air
     yesterday = datetime.now(VN_TZ) - timedelta(days=1)
@@ -794,13 +805,21 @@ async def generate_personal_report(
         for deal_name, count in yesterday_deal_data.items():
             if match_staff_name(deal_name, dashboard_names):
                 deal_yesterday = count
+                if name == "Châu":
+                    print(f"   🔍 DEBUG Châu - matched deal_yesterday: {deal_name} -> {count}")
                 break
     
     if monthly_deal_data:
         for deal_name, count in monthly_deal_data.items():
             if match_staff_name(deal_name, dashboard_names):
                 deal_month_total = count
+                if name == "Châu":
+                    print(f"   🔍 DEBUG Châu - matched deal_month_total: {deal_name} -> {count}")
                 break
+    
+    # Debug for Chau
+    if name == "Châu":
+        print(f"   🔍 DEBUG Châu - FINAL: deal_yesterday={deal_yesterday}, deal_month_total={deal_month_total}")
     
     # Logic deal: Tính KPI deal theo ngày trong tháng
     # Số ngày đã qua trong tháng (tính đến hôm qua)
@@ -916,6 +935,12 @@ async def send_daily_booking_reports():
         print(f"📅 Getting deal data...")
         yesterday_deal_data = await get_deal_by_date(yesterday)
         monthly_deal_data = await get_monthly_deal_stats(current_month)
+        
+        # Debug summary
+        print(f"\n📊 DATA SUMMARY:")
+        print(f"   - yesterday_data: {yesterday_data}")
+        print(f"   - yesterday_deal_data: {yesterday_deal_data}")
+        print(f"   - monthly_deal_data: {monthly_deal_data}")
         
         if not monthly_stats:
             print("❌ Failed to get monthly stats, aborting...")
