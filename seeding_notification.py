@@ -239,20 +239,7 @@ async def send_seeding_card_via_webhook(
 ) -> bool:
     """
     Gửi Message Card qua Webhook URL (cho external groups)
-    
-    Args:
-        webhook_url: Webhook URL của Custom Bot trong nhóm
-        koc_name: Tên KOC
-        channel_id: ID kênh TikTok
-        tiktok_url: Link video TikTok
-        product: Tên sản phẩm
-        image_key: Image key từ Lark (đã upload qua API)
-        record_url: Link đến bản ghi trong Lark Base
-        title: Tiêu đề card
-        header_color: Màu header
-        
-    Returns: 
-        True nếu gửi thành công
+    Layout compact: thumbnail nhỏ bên trái, thông tin bên phải
     """
     if not webhook_url:
         print("❌ Missing webhook_url")
@@ -262,98 +249,83 @@ async def send_seeding_card_via_webhook(
         # Tạo card elements
         elements = []
         
-        # Thêm thumbnail nếu có image_key
+        # Layout 2 cột: thumbnail + info
         if image_key:
-            elements.append({
-                "tag": "img",
-                "img_key": image_key,
-                "alt": {
-                    "tag": "plain_text",
-                    "content": "Video thumbnail"
-                },
-                "mode": "fit_horizontal",
-                "preview": True
-            })
-        
-        # Thông tin chi tiết
-        info_parts = []
-        if koc_name:
-            info_parts.append(f"**Tên KOC:** {koc_name}")
-        if channel_id:
-            info_parts.append(f"**ID kênh:** {channel_id}")
-        if product:
-            info_parts.append(f"**Sản phẩm:** {product}")
-        
-        if info_parts:
+            # Column set với thumbnail bên trái, info bên phải
+            column_set = {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "top",
+                        "elements": [
+                            {
+                                "tag": "img",
+                                "img_key": image_key,
+                                "alt": {
+                                    "tag": "plain_text",
+                                    "content": "thumbnail"
+                                },
+                                "mode": "crop_center",
+                                "preview": True
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 2,
+                        "vertical_align": "top",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "lark_md",
+                                    "content": f"**Tên KOC:** {koc_name}\n**ID kênh:** {channel_id}\n**Sản phẩm:** {product}"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+            elements.append(column_set)
+        else:
+            # Không có thumbnail - chỉ hiện info
             elements.append({
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "\n".join(info_parts)
+                    "content": f"**Tên KOC:** {koc_name}\n**ID kênh:** {channel_id}\n**Sản phẩm:** {product}"
                 }
             })
         
-        # Link video (hiển thị dạng text)
+        # Button XEM VIDEO
         if tiktok_url:
-            elements.append({
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**Link video:** {tiktok_url}"
-                }
-            })
-        
-        # Note
-        elements.append({
-            "tag": "note",
-            "elements": [
-                {
-                    "tag": "plain_text",
-                    "content": "Check gấp triển khai công việc nha mọi người"
-                }
-            ]
-        })
-        
-        # Divider
-        elements.append({"tag": "hr"})
-        
-        # Buttons
-        actions = []
-        
-        if tiktok_url:
-            actions.append({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": "🎬 XEM VIDEO"
-                },
-                "type": "primary",
-                "url": tiktok_url
-            })
-        
-        if record_url:
-            actions.append({
-                "tag": "button",
-                "text": {
-                    "tag": "plain_text",
-                    "content": "📋 LINK BẢN GHI"
-                },
-                "type": "default",
-                "url": record_url
-            })
-        
-        if actions:
             elements.append({
                 "tag": "action",
-                "actions": actions
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "🎬 Xem video"
+                        },
+                        "type": "primary",
+                        "url": tiktok_url
+                    }
+                ]
             })
         
-        # Card JSON for Webhook
+        # Card JSON for Webhook - compact config
         payload = {
             "msg_type": "interactive",
             "card": {
                 "config": {
-                    "wide_screen_mode": True
+                    "wide_screen_mode": False
                 },
                 "header": {
                     "title": {
@@ -375,7 +347,6 @@ async def send_seeding_card_via_webhook(
             )
             
             result = response.json()
-            # Webhook trả về {"StatusCode":0,"StatusMessage":"success"} nếu thành công
             if result.get("StatusCode") == 0 or result.get("code") == 0:
                 print(f"✅ Sent seeding card via webhook")
                 return True
