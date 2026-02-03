@@ -43,8 +43,10 @@ from seeding_notification import (
     get_tiktok_thumbnail,
     upload_image_to_lark,
     send_seeding_card,
+    send_seeding_card_via_webhook,
     send_seeding_notification,
-    GAP_2H_CHAT_ID
+    GAP_2H_CHAT_ID,
+    SEEDING_WEBHOOK_URL
 )
 
 # ============ SCHEDULER CONFIG ============
@@ -796,6 +798,8 @@ async def handle_seeding_webhook(request: Request):
     Webhook nhận thông báo từ Lark Base Automation
     Khi có record mới/cập nhật trong Base → trigger webhook này
     
+    Gửi tin nhắn qua Webhook URL (cho external groups như "Gấp 2H")
+    
     Expected JSON body:
     {
         "koc_name": "Tên KOC",
@@ -869,21 +873,21 @@ async def handle_seeding_webhook(request: Request):
         if not tiktok_url:
             return {"success": False, "error": "Missing tiktok_url"}
         
-        # Check chat_id
-        chat_id = GAP_2H_CHAT_ID
-        if not chat_id:
-            return {"success": False, "error": "Missing GAP_2H_CHAT_ID environment variable"}
+        # Check webhook URL hoặc chat_id
+        if not SEEDING_WEBHOOK_URL and not GAP_2H_CHAT_ID:
+            return {"success": False, "error": "Missing SEEDING_WEBHOOK_URL or GAP_2H_CHAT_ID environment variable"}
         
-        # Gửi notification
+        # Gửi notification (ưu tiên webhook nếu có)
         result = await send_seeding_notification(
-            chat_id=chat_id,
             koc_name=koc_name,
             channel_id=channel_id,
             tiktok_url=tiktok_url,
             product=product,
             get_token_func=get_tenant_access_token,
+            webhook_url=SEEDING_WEBHOOK_URL,
+            chat_id=GAP_2H_CHAT_ID,
             record_url=record_url,
-            with_thumbnail=True
+            with_thumbnail=False  # Webhook không hỗ trợ upload image
         )
         
         return result
@@ -900,26 +904,28 @@ async def test_seeding_card(
     tiktok_url: str = "https://www.tiktok.com/@hainguoiiunhau9/video/7602154659691777288",
     koc_name: str = "Hai người yêu nhau 💕",
     channel_id: str = "hainguoiiunhau9",
-    product: str = "Box quà YÊU - Ủ+Xịt+Tinh dầu",
-    with_thumbnail: bool = True
+    product: str = "Box quà YÊU - Ủ+Xịt+Tinh dầu"
 ):
     """
     Endpoint test gửi seeding card
     Dùng để test trước khi setup automation
     """
-    chat_id = GAP_2H_CHAT_ID
-    if not chat_id:
-        return {"success": False, "error": "Missing GAP_2H_CHAT_ID environment variable. Please set it in Railway."}
+    if not SEEDING_WEBHOOK_URL and not GAP_2H_CHAT_ID:
+        return {
+            "success": False, 
+            "error": "Missing SEEDING_WEBHOOK_URL environment variable. Please set it in Railway."
+        }
     
     result = await send_seeding_notification(
-        chat_id=chat_id,
         koc_name=koc_name,
         channel_id=channel_id,
         tiktok_url=tiktok_url,
         product=product,
         get_token_func=get_tenant_access_token,
+        webhook_url=SEEDING_WEBHOOK_URL,
+        chat_id=GAP_2H_CHAT_ID,
         record_url=None,
-        with_thumbnail=with_thumbnail
+        with_thumbnail=False  # Webhook không hỗ trợ upload image
     )
     
     return result
@@ -945,26 +951,25 @@ async def send_seeding_manual(
     tiktok_url: str,
     product: str,
     record_url: str = None,
-    with_thumbnail: bool = True,
-    chat_id: str = None
+    webhook_url: str = None
 ):
     """
     API gửi seeding card thủ công
-    Có thể chỉ định chat_id khác nếu cần
+    Có thể chỉ định webhook_url khác nếu cần
     """
-    target_chat_id = chat_id or GAP_2H_CHAT_ID
-    if not target_chat_id:
-        return {"success": False, "error": "Missing chat_id"}
+    target_webhook = webhook_url or SEEDING_WEBHOOK_URL
+    if not target_webhook:
+        return {"success": False, "error": "Missing webhook_url"}
     
     result = await send_seeding_notification(
-        chat_id=target_chat_id,
         koc_name=koc_name,
         channel_id=channel_id,
         tiktok_url=tiktok_url,
         product=product,
         get_token_func=get_tenant_access_token,
+        webhook_url=target_webhook,
         record_url=record_url,
-        with_thumbnail=with_thumbnail
+        with_thumbnail=False
     )
     
     return result

@@ -2,19 +2,27 @@
 
 ## Tổng quan
 
-Tính năng này cho phép gửi thông báo tự động vào nhóm Lark khi có video TikTok mới cần seeding, bao gồm:
-- Thumbnail video (tự động crawl từ TikTok)
+Tính năng này cho phép gửi thông báo tự động vào nhóm Lark (kể cả external groups) khi có video TikTok mới cần seeding, bao gồm:
 - Thông tin KOC, kênh, sản phẩm
 - Button xem video và link bản ghi
 
+**Lưu ý:** Vì nhóm "Gấp 2H" là external group, không thể add Jarvis Bot vào. Thay vào đó sử dụng **Custom Bot (Webhook)**.
+
 ---
 
-## Bước 1: Lấy Chat ID của nhóm
+## Bước 1: Tạo Custom Bot trong nhóm
 
-1. Mở nhóm cần nhận thông báo (ví dụ: "Gấp 2H") trong Lark
-2. Gửi tin nhắn mention @Jarvis (ví dụ: "@Jarvis test")
-3. Xem log trên Railway → tìm dòng `📍 Chat ID: oc_xxxxx`
-4. Copy chat_id này
+Bạn đã có webhook URL:
+```
+https://open.larksuite.com/open-apis/bot/v2/hook/59f0b874-ea0f-4011-aad8-be4a58b2db62
+```
+
+Nếu cần tạo mới:
+1. Mở nhóm trong Lark
+2. Click tên nhóm → **Settings** → **Bots**
+3. Click **Add Bot** → **Custom Bot**
+4. Đặt tên (ví dụ: "Seeding Alert")
+5. Copy **Webhook URL**
 
 ---
 
@@ -24,7 +32,7 @@ Tính năng này cho phép gửi thông báo tự động vào nhóm Lark khi c�
 2. Tab **Variables** → Add variable:
 
 ```
-GAP_2H_CHAT_ID = oc_xxxxx (chat_id từ bước 1)
+SEEDING_WEBHOOK_URL = https://open.larksuite.com/open-apis/bot/v2/hook/59f0b874-ea0f-4011-aad8-be4a58b2db62
 ```
 
 3. Railway sẽ tự động redeploy
@@ -37,11 +45,6 @@ Gọi API test để đảm bảo mọi thứ hoạt động:
 
 ```bash
 curl -X POST "https://your-jarvis.railway.app/test/seeding-card"
-```
-
-Hoặc mở trình duyệt:
-```
-https://your-jarvis.railway.app/test/seeding-card?tiktok_url=https://www.tiktok.com/@test/video/123&koc_name=Test%20KOC&product=Test%20Product
 ```
 
 ---
@@ -103,22 +106,17 @@ https://your-jarvis.railway.app/webhook/seeding
 
 ## Troubleshooting
 
-### "Missing GAP_2H_CHAT_ID"
+### "Missing SEEDING_WEBHOOK_URL"
 - Chưa set biến môi trường trên Railway
 - Hoặc set sai tên biến
 
-### "Failed to send seeding card"
-- Bot chưa được add vào nhóm
-- Chat ID sai
+### "Failed to send via webhook"
+- Webhook URL sai
+- Bot đã bị xóa khỏi nhóm
 - Xem log chi tiết trên Railway
 
-### Thumbnail không hiển thị
-- TikTok có thể block request
-- Video có thể đã bị xóa
-- Card vẫn được gửi, chỉ không có ảnh
-
 ### Webhook không được gọi
-- Kiểm tra URL đúng chưa
+- Kiểm tra URL Jarvis đúng chưa
 - Automation có được bật không
 - Condition có đúng không
 
@@ -130,18 +128,16 @@ https://your-jarvis.railway.app/webhook/seeding
 ┌─────────────────────────────────────────┐
 │  🔥 SOS VIDEO ĐÃ AIR SEEDING GẤP        │
 ├─────────────────────────────────────────┤
-│  ┌─────────────────────────┐            │
-│  │                         │            │
-│  │    [Video Thumbnail]    │            │
-│  │                         │            │
-│  └─────────────────────────┘            │
 │                                         │
-│  • Tên KOC: Hai người yêu nhau 💕       │
-│  • ID kênh: hainguoiiunhau9             │
-│  • Sản phẩm: Box quà "YÊU"              │
+│  **Tên KOC:** Hai người yêu nhau 💕     │
+│  **ID kênh:** hainguoiiunhau9           │
+│  **Sản phẩm:** Box quà "YÊU"            │
+│  **Link video:** https://tiktok.com/... │
 │                                         │
 │  Check gấp triển khai công việc...      │
 │─────────────────────────────────────────│
 │  [🎬 XEM VIDEO]  [📋 LINK BẢN GHI]      │
 └─────────────────────────────────────────┘
 ```
+
+**Lưu ý:** Webhook không hỗ trợ hiển thị thumbnail như khi paste link thủ công.
