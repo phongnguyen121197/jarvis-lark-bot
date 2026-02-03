@@ -796,22 +796,27 @@ async def test_daily_booking():
 async def handle_seeding_webhook(request: Request):
     """
     Webhook nhận thông báo từ Lark Base Automation
-    Khi có record mới/cập nhật trong Base → trigger webhook này
-    
-    Gửi tin nhắn qua Webhook URL (cho external groups như "Gấp 2H")
-    
-    Expected JSON body:
-    {
-        "koc_name": "Tên KOC",
-        "channel_id": "ID kênh",
-        "tiktok_url": "https://tiktok.com/...",
-        "product": "Tên sản phẩm",
-        "record_url": "Link bản ghi" (optional)
-    }
+    Hỗ trợ cả JSON và form-urlencoded
     """
     try:
-        body = await request.json()
-        print(f"📩 Seeding webhook received: {json.dumps(body, indent=2, ensure_ascii=False)}")
+        content_type = request.headers.get("content-type", "")
+        
+        # Parse body theo content type
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+            except:
+                # Nếu JSON invalid, thử parse như text
+                raw_body = await request.body()
+                body_text = raw_body.decode('utf-8')
+                print(f"⚠️ Invalid JSON, trying to parse as text: {body_text[:200]}")
+                # Thử extract thủ công
+                body = extract_fields_from_text(body_text)
+        else:
+            body = await request.form()
+            body = dict(body)
+        
+        print(f"📩 Seeding webhook received: {body}")
         
         # Parse data - hỗ trợ nhiều format field name khác nhau
         data = body
@@ -897,6 +902,30 @@ async def handle_seeding_webhook(request: Request):
         print(f"❌ Seeding webhook error: {e}")
         print(traceback.format_exc())
         return {"success": False, "error": str(e)}
+
+
+def extract_fields_from_text(text: str) -> dict:
+    """
+    Extract fields từ text khi JSON bị lỗi do ký tự đặc biệt
+    """
+    import re
+    result = {}
+    
+    # Pattern để tìm key-value pairs
+    patterns = [
+        (r'"tiktok_url"\s*:\s*"([^"]*)"', 'tiktok_url'),
+        (r'"product"\s*:\s*"([^"]*)"', 'product'),
+        (r'"product_type"\s*:\s*"(.*?)"(?=\s*[,}])', 'product_type'),
+        (r'"koc_name"\s*:\s*"([^"]*)"', 'koc_name'),
+        (r'"channel_id"\s*:\s*"([^"]*)"', 'channel_id'),
+    ]
+    
+    for pattern, key in patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            result[key] = match.group(1)
+    
+    return result
 
 
 @app.post("/test/seeding-card")
