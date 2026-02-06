@@ -1192,6 +1192,77 @@ async def test_lark_update(record_id: str):
         return {"success": False, "error": str(e), "app_token": CONTRACT_BASE_APP_TOKEN, "table_id": CONTRACT_BASE_TABLE_ID}
 
 
+@app.get("/test/lark-debug")
+async def test_lark_debug():
+    """Debug: list tables in base + try read record to find permission issue."""
+    from lark_contract import get_token, headers as get_headers_fn
+    import requests as req
+
+    results = {}
+    app_token = CONTRACT_BASE_APP_TOKEN
+    table_id = CONTRACT_BASE_TABLE_ID
+
+    # 1. Auth test
+    try:
+        token = get_token()
+        results["auth"] = "OK"
+        results["token_prefix"] = token[:10] + "..."
+    except Exception as e:
+        results["auth"] = f"FAILED: {e}"
+        return results
+
+    h = get_headers_fn()
+
+    # 2. List tables in base
+    try:
+        resp = req.get(f"https://open.larksuite.com/open-apis/bitable/v1/apps/{app_token}/tables", headers=h, timeout=15)
+        data = resp.json()
+        if data.get("code") == 0:
+            tables = [{"name": t.get("name"), "id": t.get("table_id")} for t in data.get("data", {}).get("items", [])]
+            results["list_tables"] = {"status": "OK", "count": len(tables), "tables": tables[:20]}
+            # Check if our table exists
+            our_table = [t for t in tables if t["id"] == table_id]
+            results["target_table_found"] = bool(our_table)
+            if our_table:
+                results["target_table_name"] = our_table[0]["name"]
+        else:
+            results["list_tables"] = {"status": "FAILED", "code": data.get("code"), "msg": data.get("msg")}
+    except Exception as e:
+        results["list_tables"] = {"status": f"ERROR: {e}"}
+
+    # 3. Try read record
+    try:
+        resp = req.get(
+            f"https://open.larksuite.com/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/recvasVSSlBTvx",
+            headers=h, timeout=15
+        )
+        data = resp.json()
+        if data.get("code") == 0:
+            results["read_record"] = {"status": "OK", "fields": list(data.get("data", {}).get("record", {}).get("fields", {}).keys())}
+        else:
+            results["read_record"] = {"status": "FAILED", "code": data.get("code"), "msg": data.get("msg")}
+    except Exception as e:
+        results["read_record"] = {"status": f"ERROR: {e}"}
+
+    # 4. Try list fields of target table
+    try:
+        resp = req.get(
+            f"https://open.larksuite.com/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields",
+            headers=h, timeout=15
+        )
+        data = resp.json()
+        if data.get("code") == 0:
+            fields = [{"name": f.get("field_name"), "type": f.get("type")} for f in data.get("data", {}).get("items", [])]
+            results["table_fields"] = {"status": "OK", "fields": fields}
+        else:
+            results["table_fields"] = {"status": "FAILED", "code": data.get("code"), "msg": data.get("msg")}
+    except Exception as e:
+        results["table_fields"] = {"status": f"ERROR: {e}"}
+
+    results["config"] = {"app_token": app_token, "table_id": table_id}
+    return results
+
+
 @app.post("/test/contract")
 async def test_contract_generate():
     """
