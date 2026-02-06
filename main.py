@@ -80,7 +80,7 @@ GROUP_CHATS = {
 TIKTOK_ALERT_CHAT_ID = os.getenv("TIKTOK_ALERT_CHAT_ID", GROUP_CHATS.get("digital", ""))
 
 # ============ CONTRACT GENERATOR CONFIG ============
-CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "XfHGbvXrRaK1zcs1Z1zI5QR3ghf")
+CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "XfHGbvXrRaK1zcsTZ1zl5QR3ghf")
 CONTRACT_BASE_TABLE_ID = os.getenv("CONTRACT_BASE_TABLE_ID", "tblndkVZ6Dao620Y")
 
 _discovered_groups = {}
@@ -1072,17 +1072,19 @@ async def _process_contract_background(record_id: str, fields: dict):
     import traceback
     
     try:
+        print(f"🔄 [BG] Starting contract generation for record: {record_id}")
         ho_ten = fields.get("Họ và Tên Bên B", "")
         contract_data = parse_lark_record_to_contract_data(fields)
-        print(f"📝 Generating contract for: {ho_ten} (ID KOC: {contract_data.get('id_koc', 'N/A')})")
+        print(f"📝 [BG] Generating contract for: {ho_ten} (ID KOC: {contract_data.get('id_koc', 'N/A')})")
         
-        # Generate Word file (fast, ~50ms)
+        # Generate Word file
         output_path = generate_contract(contract_data)
-        print(f"✅ Contract file created: {output_path}")
+        print(f"✅ [BG] Contract file created: {output_path}")
         
         # Upload to Google Drive
         drive_client = get_drive_client()
         if not drive_client:
+            print(f"❌ [BG] Google Drive not configured")
             await _update_contract_status(record_id, "Failed", error="Google Drive not configured")
             return
         
@@ -1090,7 +1092,9 @@ async def _process_contract_background(record_id: str, fields: dict):
         today = datetime.now().strftime("%d-%m-%Y")
         file_name = f"{id_koc} {today}" if id_koc else f"HD_KOC {today}"
         
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        
+        # Upload (sync → async via executor)
         drive_result = await loop.run_in_executor(
             None,
             lambda: drive_client.upload_docx_as_gdoc(
@@ -1102,17 +1106,15 @@ async def _process_contract_background(record_id: str, fields: dict):
         
         file_id = drive_result["file_id"]
         gdoc_link = drive_result["web_view_link"]
-        print(f"📤 Uploaded to Google Drive: {gdoc_link}")
+        print(f"📤 [BG] Uploaded to Google Drive: {gdoc_link}")
         
-        # Permission + Lark update concurrently
-        async def _set_perm():
-            await loop.run_in_executor(None, lambda: drive_client.set_anyone_edit(file_id))
+        # Set permission (async via executor)
+        await loop.run_in_executor(None, lambda: drive_client.set_anyone_edit(file_id))
+        print(f"🔓 [BG] Permission set for file: {file_id}")
         
-        await asyncio.gather(
-            _set_perm(),
-            _update_contract_status(record_id, "Done", output_link=gdoc_link),
-            return_exceptions=True,
-        )
+        # Update Lark record
+        result = await _update_contract_status(record_id, "Done", output_link=gdoc_link)
+        print(f"📋 [BG] Lark update result: {result}")
         
         # Cleanup
         try:
@@ -1121,10 +1123,10 @@ async def _process_contract_background(record_id: str, fields: dict):
         except:
             pass
         
-        print(f"✅ Contract done: {ho_ten} → {gdoc_link}")
+        print(f"✅ [BG] Contract done: {ho_ten} → {gdoc_link}")
     
     except Exception as e:
-        print(f"❌ Background contract error: {e}")
+        print(f"❌ [BG] Background contract error: {e}")
         print(traceback.format_exc())
         try:
             await _update_contract_status(record_id, "Failed", error=str(e))
@@ -1147,6 +1149,9 @@ async def _update_contract_status(record_id: str, status: str, output_link: str 
     if error:
         print(f"⚠️ Contract error for {record_id}: {error}")
     
+    print(f"🔧 [DEBUG] Updating Lark: app={CONTRACT_BASE_APP_TOKEN}, table={CONTRACT_BASE_TABLE_ID}, record={record_id}")
+    print(f"🔧 [DEBUG] Fields: {update_fields}")
+    
     try:
         result = await update_record(
             CONTRACT_BASE_APP_TOKEN,
@@ -1154,10 +1159,12 @@ async def _update_contract_status(record_id: str, status: str, output_link: str 
             record_id,
             update_fields,
         )
-        print(f"📋 Lark record updated: {record_id} → Status={status}")
+        print(f"📋 Lark update result: {result}")
         return result
     except Exception as e:
         print(f"❌ Failed to update Lark record {record_id}: {e}")
+        import traceback
+        print(traceback.format_exc())
         return None
 
 
