@@ -39,6 +39,8 @@ from lark_base import generate_koc_summary, generate_content_calendar, generate_
 from report_generator import generate_koc_report_text, generate_content_calendar_text, generate_task_summary_text, generate_general_summary_text, generate_dashboard_report_text, generate_cheng_report_text
 from notes_manager import check_note_command, handle_note_command, get_notes_manager
 from daily_booking_report import send_daily_booking_reports, BOOKING_GROUP_CHAT_ID
+from contract_generator import generate_contract, parse_lark_record_to_contract_data
+from google_drive_client import get_drive_client
 from seeding_notification import (
     get_tiktok_thumbnail,
     upload_image_to_lark,
@@ -76,6 +78,10 @@ GROUP_CHATS = {
 }
 
 TIKTOK_ALERT_CHAT_ID = os.getenv("TIKTOK_ALERT_CHAT_ID", GROUP_CHATS.get("digital", ""))
+
+# ============ CONTRACT GENERATOR CONFIG ============
+CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "W4trb7H8FaxrbbsjWLXlxru2gUe")
+CONTRACT_BASE_TABLE_ID = os.getenv("CONTRACT_BASE_TABLE_ID", "tblWZAmV3MfFsJpo")
 
 _discovered_groups = {}
 
@@ -1003,6 +1009,186 @@ async def send_seeding_manual(
     )
     
     return result
+
+
+# ============ CONTRACT GENERATOR ENDPOINTS ============
+
+@app.post("/webhook/contract")
+async def handle_contract_webhook(request: Request):
+    """
+    Webhook nhận yêu cầu tạo hợp đồng KOC từ Lark Base Automation.
+    
+    Flow: Button click → Lark Automation → POST /webhook/contract
+    → Fill Word template → Upload Google Drive → Update Lark record
+    
+    Expected payload (from Lark Automation HTTP Request):
+    {
+        "record_id": "recXXX",
+        "fields": {
+            "ID KOC": "...",
+            "Họ và Tên Bên B": "...",
+            "Địa chỉ Bên B": "...",
+            ...
+        }
+    }
+    """
+    import traceback
+    
+    try:
+        content_type = request.headers.get("content-type", "")
+        
+        if "application/json" in content_type:
+            body = await request.json()
+        else:
+            raw = await request.body()
+            body = json.loads(raw.decode("utf-8"))
+        
+        print(f"📩 Contract webhook received: {json.dumps(body, ensure_ascii=False)[:500]}")
+        
+        # === Extract record_id and fields ===
+        record_id = body.get("record_id", "")
+        fields = body.get("fields", {})
+        
+        # Fallback: nếu Automation gửi flat fields (không wrap trong "fields")
+        if not fields and not record_id:
+            fields = body
+            record_id = body.get("record_id", body.get("Record ID", ""))
+        
+        if not record_id:
+            return {"success": False, "error": "Missing record_id"}
+        
+        ho_ten = fields.get("Họ và Tên Bên B", "")
+        if not ho_ten:
+            # Try update status to Failed
+            await _update_contract_status(record_id, "Failed", error="Missing 'Họ và Tên Bên B'")
+            return {"success": False, "error": "Missing required field: Họ và Tên Bên B"}
+        
+        # === Generate contract ===
+        contract_data = parse_lark_record_to_contract_data(fields)
+        print(f"📝 Generating contract for: {ho_ten} (ID KOC: {contract_data.get('id_koc', 'N/A')})")
+        
+        output_path = generate_contract(contract_data)
+        print(f"✅ Contract file created: {output_path}")
+        
+        # === Upload to Google Drive ===
+        drive_client = get_drive_client()
+        if not drive_client:
+            await _update_contract_status(record_id, "Failed", error="Google Drive not configured")
+            return {"success": False, "error": "Google Drive client not available. Check GOOGLE_CREDENTIALS_JSON env var."}
+        
+        id_koc = contract_data.get("id_koc", "")
+        today = datetime.now().strftime("%d-%m-%Y")
+        file_name = f"{id_koc} {today}" if id_koc else f"HD_KOC {today}"
+        
+        drive_result = drive_client.upload_docx_as_gdoc(
+            file_path=output_path,
+            file_name=file_name,
+        )
+        
+        gdoc_link = drive_result["web_view_link"]
+        print(f"📤 Uploaded to Google Drive: {gdoc_link}")
+        
+        # === Update Lark Base record ===
+        await _update_contract_status(record_id, "Done", output_link=gdoc_link)
+        
+        # Cleanup temp file
+        try:
+            os.remove(output_path)
+            os.rmdir(os.path.dirname(output_path))
+        except:
+            pass
+        
+        return {
+            "success": True,
+            "record_id": record_id,
+            "koc_name": ho_ten,
+            "google_docs_link": gdoc_link,
+        }
+    
+    except Exception as e:
+        print(f"❌ Contract webhook error: {e}")
+        print(traceback.format_exc())
+        
+        # Try to update status as Failed
+        try:
+            record_id = body.get("record_id", "") if 'body' in dir() else ""
+            if record_id:
+                await _update_contract_status(record_id, "Failed", error=str(e))
+        except:
+            pass
+        
+        return {"success": False, "error": str(e)}
+
+
+async def _update_contract_status(record_id: str, status: str, output_link: str = None, error: str = None):
+    """Update contract record in Lark Base with status and output link."""
+    from lark_base import update_record
+    
+    update_fields = {"Status": status}
+    
+    if output_link:
+        update_fields["OutputWord"] = {
+            "text": output_link,
+            "link": output_link,
+        }
+    
+    if error:
+        print(f"⚠️ Contract error for {record_id}: {error}")
+    
+    try:
+        result = await update_record(
+            CONTRACT_BASE_APP_TOKEN,
+            CONTRACT_BASE_TABLE_ID,
+            record_id,
+            update_fields,
+        )
+        print(f"📋 Lark record updated: {record_id} → Status={status}")
+        return result
+    except Exception as e:
+        print(f"❌ Failed to update Lark record {record_id}: {e}")
+        return None
+
+
+@app.post("/test/contract")
+async def test_contract_generate():
+    """
+    Test endpoint - generate contract with sample data (không update Lark).
+    """
+    sample_data = {
+        "id_koc": "TEST001",
+        "ho_ten": "Nguyễn Văn Test",
+        "dia_chi": "123 Đường Test, Quận 1, TP.HCM",
+        "mst": "0123456789",
+        "sdt": "0901234567",
+        "cccd": "001099012345",
+        "cccd_ngay_cap": "15/06/2021",
+        "cccd_noi_cap": "Cục CS QLHC về TTXH",
+        "gmail": "test@gmail.com",
+        "stk": "1234567890",
+    }
+    
+    try:
+        output_path = generate_contract(sample_data)
+        
+        # Try upload to Google Drive if configured
+        drive_client = get_drive_client()
+        gdoc_link = None
+        if drive_client:
+            drive_result = drive_client.upload_docx_as_gdoc(
+                file_path=output_path,
+                file_name="TEST_HD_KOC_Nguyen_Van_Test",
+            )
+            gdoc_link = drive_result["web_view_link"]
+        
+        return {
+            "success": True,
+            "local_path": output_path,
+            "google_docs_link": gdoc_link,
+            "drive_configured": drive_client is not None,
+        }
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
 if __name__ == "__main__":
