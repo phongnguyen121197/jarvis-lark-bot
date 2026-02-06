@@ -17,13 +17,14 @@ import hashlib
 import time
 import re
 import asyncio
+import threading
 from datetime import datetime
 from typing import Optional, Dict, List
 from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import CBC
 from cryptography.hazmat.backends import default_backend
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import httpx
 from dotenv import load_dotenv
@@ -1022,10 +1023,10 @@ async def send_seeding_manual(
 # ============ CONTRACT GENERATOR ENDPOINTS ============
 
 @app.post("/webhook/contract")
-async def handle_contract_webhook(request: Request, background_tasks: BackgroundTasks):
+async def handle_contract_webhook(request: Request):
     """
     Webhook nhận yêu cầu tạo hợp đồng KOC từ Lark Base Automation.
-    Returns immediately, processes in background for speed.
+    Returns immediately, processes in background thread for reliability.
     """
     try:
         content_type = request.headers.get("content-type", "")
@@ -1052,8 +1053,14 @@ async def handle_contract_webhook(request: Request, background_tasks: Background
         if not ho_ten:
             return {"success": False, "error": "Missing required field: Họ và Tên Bên B"}
         
-        # === Return immediately, process in background ===
-        background_tasks.add_task(_process_contract_background, record_id, fields)
+        # === Fire-and-forget: process in background THREAD (sync, reliable) ===
+        thread = threading.Thread(
+            target=_process_contract_sync,
+            args=(record_id, fields),
+            daemon=True,
+        )
+        thread.start()
+        print(f"🚀 Background thread started for: {ho_ten}")
         
         return {
             "success": True,
@@ -1067,105 +1074,122 @@ async def handle_contract_webhook(request: Request, background_tasks: Background
         return {"success": False, "error": str(e)}
 
 
-async def _process_contract_background(record_id: str, fields: dict):
-    """Background task: generate contract → upload Drive → update Lark."""
+def _process_contract_sync(record_id: str, fields: dict):
+    """
+    Background thread: generate contract → upload Drive → update Lark.
+    Hoàn toàn SYNC (pattern giống script filter_koc_thang10.py đã chạy OK).
+    """
+    import sys
     import traceback
-    
+    from lark_contract import update_record as lark_update_record
+
     try:
         print(f"🔄 [BG] Starting contract generation for record: {record_id}")
+        sys.stdout.flush()
+
         ho_ten = fields.get("Họ và Tên Bên B", "")
         contract_data = parse_lark_record_to_contract_data(fields)
-        print(f"📝 [BG] Generating contract for: {ho_ten} (ID KOC: {contract_data.get('id_koc', 'N/A')})")
-        
-        # Generate Word file
+        id_koc = contract_data.get("id_koc", "N/A")
+        print(f"📝 [BG] Generating contract for: {ho_ten} (ID KOC: {id_koc})")
+        sys.stdout.flush()
+
+        # 1. Generate Word file
         output_path = generate_contract(contract_data)
         print(f"✅ [BG] Contract file created: {output_path}")
-        
-        # Upload to Google Drive
+        sys.stdout.flush()
+
+        # 2. Upload to Google Drive (sync)
         drive_client = get_drive_client()
         if not drive_client:
-            print(f"❌ [BG] Google Drive not configured")
-            await _update_contract_status(record_id, "Failed", error="Google Drive not configured")
-            return
-        
-        id_koc = contract_data.get("id_koc", "")
-        today = datetime.now().strftime("%d-%m-%Y")
-        file_name = f"{id_koc} {today}" if id_koc else f"HD_KOC {today}"
-        
-        loop = asyncio.get_running_loop()
-        
-        # Upload (sync → async via executor)
-        drive_result = await loop.run_in_executor(
-            None,
-            lambda: drive_client.upload_docx_as_gdoc(
-                file_path=output_path,
-                file_name=file_name,
-                set_permission=False,
+            print("❌ [BG] Google Drive not configured")
+            lark_update_record(
+                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id,
+                {"Status": "Failed"}
             )
+            return
+
+        today = datetime.now().strftime("%d-%m-%Y")
+        file_name = f"{id_koc} {today}" if id_koc != "N/A" else f"HD_KOC {today}"
+
+        drive_result = drive_client.upload_docx_as_gdoc(
+            file_path=output_path,
+            file_name=file_name,
+            set_permission=False,
         )
-        
         file_id = drive_result["file_id"]
         gdoc_link = drive_result["web_view_link"]
         print(f"📤 [BG] Uploaded to Google Drive: {gdoc_link}")
-        
-        # Set permission (async via executor)
-        await loop.run_in_executor(None, lambda: drive_client.set_anyone_edit(file_id))
+        sys.stdout.flush()
+
+        # 3. Set permission (sync)
+        drive_client.set_anyone_edit(file_id)
         print(f"🔓 [BG] Permission set for file: {file_id}")
-        
-        # Update Lark record
-        result = await _update_contract_status(record_id, "Done", output_link=gdoc_link)
-        print(f"📋 [BG] Lark update result: {result}")
-        
-        # Cleanup
-        try:
-            os.remove(output_path)
-            os.rmdir(os.path.dirname(output_path))
-        except:
-            pass
-        
-        print(f"✅ [BG] Contract done: {ho_ten} → {gdoc_link}")
-    
-    except Exception as e:
-        print(f"❌ [BG] Background contract error: {e}")
-        print(traceback.format_exc())
-        try:
-            await _update_contract_status(record_id, "Failed", error=str(e))
-        except:
-            pass
 
-
-async def _update_contract_status(record_id: str, status: str, output_link: str = None, error: str = None):
-    """Update contract record in Lark Base with status and output link."""
-    from lark_base import update_record
-    
-    update_fields = {"Status": status}
-    
-    if output_link:
-        update_fields["Kết quả"] = {
-            "text": output_link,
-            "link": output_link,
+        # 4. Update Lark record (sync - dùng lark_contract.py)
+        update_fields = {
+            "Status": "Done",
+            "Kết quả": {
+                "text": gdoc_link,
+                "link": gdoc_link,
+            },
         }
-    
-    if error:
-        print(f"⚠️ Contract error for {record_id}: {error}")
-    
-    print(f"🔧 [DEBUG] Updating Lark: app={CONTRACT_BASE_APP_TOKEN}, table={CONTRACT_BASE_TABLE_ID}, record={record_id}")
-    print(f"🔧 [DEBUG] Fields: {update_fields}")
-    
-    try:
-        result = await update_record(
+        print(f"🔧 [BG] Updating Lark: app={CONTRACT_BASE_APP_TOKEN}, table={CONTRACT_BASE_TABLE_ID}, record={record_id}")
+        print(f"🔧 [BG] Fields: {update_fields}")
+        sys.stdout.flush()
+
+        result = lark_update_record(
             CONTRACT_BASE_APP_TOKEN,
             CONTRACT_BASE_TABLE_ID,
             record_id,
             update_fields,
         )
-        print(f"📋 Lark update result: {result}")
-        return result
+        print(f"📋 [BG] Lark update result: {result}")
+        sys.stdout.flush()
+
+        # 5. Cleanup temp files
+        try:
+            os.remove(output_path)
+            os.rmdir(os.path.dirname(output_path))
+        except:
+            pass
+
+        print(f"✅ [BG] Contract done: {ho_ten} → {gdoc_link}")
+        sys.stdout.flush()
+
     except Exception as e:
-        print(f"❌ Failed to update Lark record {record_id}: {e}")
+        print(f"❌ [BG] Contract error: {e}")
+        print(traceback.format_exc())
+        sys.stdout.flush()
+        try:
+            from lark_contract import update_record as lark_update_record_err
+            lark_update_record_err(
+                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id,
+                {"Status": "Failed"}
+            )
+        except:
+            pass
+
+
+@app.post("/test/lark-update/{record_id}")
+async def test_lark_update(record_id: str):
+    """Test Lark Base update only - dùng lark_contract.py (sync)."""
+    from lark_contract import update_record as lark_update_record
+    
+    print(f"🧪 Testing Lark update: app={CONTRACT_BASE_APP_TOKEN}, table={CONTRACT_BASE_TABLE_ID}, record={record_id}")
+    
+    try:
+        result = lark_update_record(
+            CONTRACT_BASE_APP_TOKEN,
+            CONTRACT_BASE_TABLE_ID,
+            record_id,
+            {"Status": "Test"}
+        )
+        print(f"🧪 Result: {result}")
+        return {"success": True, "result": result, "app_token": CONTRACT_BASE_APP_TOKEN, "table_id": CONTRACT_BASE_TABLE_ID}
+    except Exception as e:
         import traceback
         print(traceback.format_exc())
-        return None
+        return {"success": False, "error": str(e), "app_token": CONTRACT_BASE_APP_TOKEN, "table_id": CONTRACT_BASE_TABLE_ID}
 
 
 @app.post("/test/contract")
