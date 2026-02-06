@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import CBC
 from cryptography.hazmat.backends import default_backend
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 import httpx
 from dotenv import load_dotenv
@@ -80,8 +80,8 @@ GROUP_CHATS = {
 TIKTOK_ALERT_CHAT_ID = os.getenv("TIKTOK_ALERT_CHAT_ID", GROUP_CHATS.get("digital", ""))
 
 # ============ CONTRACT GENERATOR CONFIG ============
-CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "W4trb7H8FaxrbbsjWLXlxru2gUe")
-CONTRACT_BASE_TABLE_ID = os.getenv("CONTRACT_BASE_TABLE_ID", "tblWZAmV3MfFsJpo")
+CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "XfHGbvXrRaK1zcs1Z1zI5QR3ghf")
+CONTRACT_BASE_TABLE_ID = os.getenv("CONTRACT_BASE_TABLE_ID", "tblndkVZ6Dao620Y")
 
 _discovered_groups = {}
 
@@ -755,6 +755,14 @@ async def startup_event():
         
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at 9:00 & 17:00 {TIMEZONE}")
+    
+    # Pre-initialize Google Drive client (avoid cold start on first contract)
+    try:
+        drive = get_drive_client()
+        if drive:
+            print("✅ Google Drive client pre-initialized")
+    except Exception as e:
+        print(f"⚠️ Google Drive init skipped: {e}")
 
 
 @app.on_event("shutdown")
@@ -1014,26 +1022,11 @@ async def send_seeding_manual(
 # ============ CONTRACT GENERATOR ENDPOINTS ============
 
 @app.post("/webhook/contract")
-async def handle_contract_webhook(request: Request):
+async def handle_contract_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Webhook nhận yêu cầu tạo hợp đồng KOC từ Lark Base Automation.
-    
-    Flow: Button click → Lark Automation → POST /webhook/contract
-    → Fill Word template → Upload Google Drive → Update Lark record
-    
-    Expected payload (from Lark Automation HTTP Request):
-    {
-        "record_id": "recXXX",
-        "fields": {
-            "ID KOC": "...",
-            "Họ và Tên Bên B": "...",
-            "Địa chỉ Bên B": "...",
-            ...
-        }
-    }
+    Returns immediately, processes in background for speed.
     """
-    import traceback
-    
     try:
         content_type = request.headers.get("content-type", "")
         
@@ -1045,11 +1038,9 @@ async def handle_contract_webhook(request: Request):
         
         print(f"📩 Contract webhook received: {json.dumps(body, ensure_ascii=False)[:500]}")
         
-        # === Extract record_id and fields ===
         record_id = body.get("record_id", "")
         fields = body.get("fields", {})
         
-        # Fallback: nếu Automation gửi flat fields (không wrap trong "fields")
         if not fields and not record_id:
             fields = body
             record_id = body.get("record_id", body.get("Record ID", ""))
@@ -1059,34 +1050,53 @@ async def handle_contract_webhook(request: Request):
         
         ho_ten = fields.get("Họ và Tên Bên B", "")
         if not ho_ten:
-            # Try update status to Failed
-            await _update_contract_status(record_id, "Failed", error="Missing 'Họ và Tên Bên B'")
             return {"success": False, "error": "Missing required field: Họ và Tên Bên B"}
         
-        # === Generate contract ===
+        # === Return immediately, process in background ===
+        background_tasks.add_task(_process_contract_background, record_id, fields)
+        
+        return {
+            "success": True,
+            "record_id": record_id,
+            "koc_name": ho_ten,
+            "status": "processing",
+        }
+    
+    except Exception as e:
+        print(f"❌ Contract webhook error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _process_contract_background(record_id: str, fields: dict):
+    """Background task: generate contract → upload Drive → update Lark."""
+    import traceback
+    
+    try:
+        ho_ten = fields.get("Họ và Tên Bên B", "")
         contract_data = parse_lark_record_to_contract_data(fields)
         print(f"📝 Generating contract for: {ho_ten} (ID KOC: {contract_data.get('id_koc', 'N/A')})")
         
+        # Generate Word file (fast, ~50ms)
         output_path = generate_contract(contract_data)
         print(f"✅ Contract file created: {output_path}")
         
-        # === Upload to Google Drive (without permission - faster) ===
+        # Upload to Google Drive
         drive_client = get_drive_client()
         if not drive_client:
             await _update_contract_status(record_id, "Failed", error="Google Drive not configured")
-            return {"success": False, "error": "Google Drive client not available. Check OAuth2 env vars."}
+            return
         
         id_koc = contract_data.get("id_koc", "")
         today = datetime.now().strftime("%d-%m-%Y")
         file_name = f"{id_koc} {today}" if id_koc else f"HD_KOC {today}"
         
-        # Upload in thread pool (synchronous → async)
-        drive_result = await asyncio.get_event_loop().run_in_executor(
+        loop = asyncio.get_event_loop()
+        drive_result = await loop.run_in_executor(
             None,
             lambda: drive_client.upload_docx_as_gdoc(
                 file_path=output_path,
                 file_name=file_name,
-                set_permission=False,  # Do permission separately for speed
+                set_permission=False,
             )
         )
         
@@ -1094,45 +1104,32 @@ async def handle_contract_webhook(request: Request):
         gdoc_link = drive_result["web_view_link"]
         print(f"📤 Uploaded to Google Drive: {gdoc_link}")
         
-        # === Run permission + Lark update CONCURRENTLY ===
-        async def _set_permission():
-            await asyncio.get_event_loop().run_in_executor(
-                None, lambda: drive_client.set_anyone_edit(file_id)
-            )
+        # Permission + Lark update concurrently
+        async def _set_perm():
+            await loop.run_in_executor(None, lambda: drive_client.set_anyone_edit(file_id))
         
         await asyncio.gather(
-            _set_permission(),
+            _set_perm(),
             _update_contract_status(record_id, "Done", output_link=gdoc_link),
             return_exceptions=True,
         )
         
-        # Cleanup temp file
+        # Cleanup
         try:
             os.remove(output_path)
             os.rmdir(os.path.dirname(output_path))
         except:
             pass
         
-        return {
-            "success": True,
-            "record_id": record_id,
-            "koc_name": ho_ten,
-            "google_docs_link": gdoc_link,
-        }
+        print(f"✅ Contract done: {ho_ten} → {gdoc_link}")
     
     except Exception as e:
-        print(f"❌ Contract webhook error: {e}")
+        print(f"❌ Background contract error: {e}")
         print(traceback.format_exc())
-        
-        # Try to update status as Failed
         try:
-            record_id = body.get("record_id", "") if 'body' in dir() else ""
-            if record_id:
-                await _update_contract_status(record_id, "Failed", error=str(e))
+            await _update_contract_status(record_id, "Failed", error=str(e))
         except:
             pass
-        
-        return {"success": False, "error": str(e)}
 
 
 async def _update_contract_status(record_id: str, status: str, output_link: str = None, error: str = None):
@@ -1142,7 +1139,7 @@ async def _update_contract_status(record_id: str, status: str, output_link: str 
     update_fields = {"Status": status}
     
     if output_link:
-        update_fields["OutputWord"] = {
+        update_fields["Kết quả"] = {
             "text": output_link,
             "link": output_link,
         }
