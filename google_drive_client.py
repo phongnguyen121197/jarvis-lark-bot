@@ -66,8 +66,9 @@ class GoogleDriveClient:
         file_path: str,
         file_name: str = None,
         folder_id: str = None,
+        set_permission: bool = True,
     ) -> Dict[str, str]:
-        """Upload .docx → Google Docs, set anyone with link can edit."""
+        """Upload .docx → Google Docs, optionally set anyone with link can edit."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         
@@ -84,32 +85,36 @@ class GoogleDriveClient:
         media = MediaFileUpload(
             file_path,
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            resumable=True,
+            resumable=False,
         )
         
         file = self.service.files().create(
             body=file_metadata,
             media_body=media,
-            fields="id, webViewLink, webContentLink",
+            fields="id, webViewLink",
         ).execute()
         
         file_id = file.get("id")
         logger.info(f"📄 Uploaded to Google Drive: {name} (ID: {file_id})")
         
-        self.service.permissions().create(
-            fileId=file_id,
-            body={"type": "anyone", "role": "writer"},
-            fields="id",
-        ).execute()
-        logger.info(f"🔓 Permission set: anyone with link can edit")
+        if set_permission:
+            self.set_anyone_edit(file_id)
         
         web_view_link = file.get("webViewLink", f"https://docs.google.com/document/d/{file_id}/edit")
         
         return {
             "file_id": file_id,
             "web_view_link": web_view_link,
-            "web_content_link": file.get("webContentLink", ""),
         }
+    
+    def set_anyone_edit(self, file_id: str):
+        """Set permission: anyone with link can edit."""
+        self.service.permissions().create(
+            fileId=file_id,
+            body={"type": "anyone", "role": "writer"},
+            fields="id",
+        ).execute()
+        logger.info(f"🔓 Permission set: anyone with link can edit")
 
 
 _drive_client: Optional[GoogleDriveClient] = None

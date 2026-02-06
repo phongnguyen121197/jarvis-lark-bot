@@ -1070,26 +1070,41 @@ async def handle_contract_webhook(request: Request):
         output_path = generate_contract(contract_data)
         print(f"✅ Contract file created: {output_path}")
         
-        # === Upload to Google Drive ===
+        # === Upload to Google Drive (without permission - faster) ===
         drive_client = get_drive_client()
         if not drive_client:
             await _update_contract_status(record_id, "Failed", error="Google Drive not configured")
-            return {"success": False, "error": "Google Drive client not available. Check GOOGLE_CREDENTIALS_JSON env var."}
+            return {"success": False, "error": "Google Drive client not available. Check OAuth2 env vars."}
         
         id_koc = contract_data.get("id_koc", "")
         today = datetime.now().strftime("%d-%m-%Y")
         file_name = f"{id_koc} {today}" if id_koc else f"HD_KOC {today}"
         
-        drive_result = drive_client.upload_docx_as_gdoc(
-            file_path=output_path,
-            file_name=file_name,
+        # Upload in thread pool (synchronous → async)
+        drive_result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: drive_client.upload_docx_as_gdoc(
+                file_path=output_path,
+                file_name=file_name,
+                set_permission=False,  # Do permission separately for speed
+            )
         )
         
+        file_id = drive_result["file_id"]
         gdoc_link = drive_result["web_view_link"]
         print(f"📤 Uploaded to Google Drive: {gdoc_link}")
         
-        # === Update Lark Base record ===
-        await _update_contract_status(record_id, "Done", output_link=gdoc_link)
+        # === Run permission + Lark update CONCURRENTLY ===
+        async def _set_permission():
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: drive_client.set_anyone_edit(file_id)
+            )
+        
+        await asyncio.gather(
+            _set_permission(),
+            _update_contract_status(record_id, "Done", output_link=gdoc_link),
+            return_exceptions=True,
+        )
         
         # Cleanup temp file
         try:
