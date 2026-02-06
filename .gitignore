@@ -5,3 +5,4 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+Add-Content .gitignore "`nget_refresh_token.py"

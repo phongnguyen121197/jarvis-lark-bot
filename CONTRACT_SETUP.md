@@ -13,75 +13,88 @@ Lark Base → Click "Generate" button
 
 ---
 
-### Bước 1: Chuẩn bị Google Service Account
+### Bước 1: Tạo OAuth2 Client trên Google Cloud
 
-1. Vào [Google Cloud Console](https://console.cloud.google.com)
-2. Tạo project mới hoặc chọn project có sẵn
-3. Enable **Google Drive API**:
-   - APIs & Services → Library → search "Google Drive API" → Enable
-4. Tạo Service Account:
-   - APIs & Services → Credentials → Create Credentials → Service Account
-   - Đặt tên (VD: `jarvis-contract-bot`)
-   - Tạo key JSON: click vào Service Account → Keys → Add Key → JSON
-   - **Download file JSON** → giữ lại nội dung
-5. Tạo Google Drive Folder:
-   - Tạo folder mới trên Google Drive (VD: "Hợp đồng KOC")
-   - Copy **Folder ID** từ URL: `https://drive.google.com/drive/folders/{FOLDER_ID}`
-   - **Share folder** với email Service Account (có dạng `xxx@xxx.iam.gserviceaccount.com`) → quyền **Editor**
-
----
-
-### Bước 2: Thêm Environment Variables trên Railway
-
-Vào Railway Dashboard → Jarvis project → Variables, thêm:
-
-```
-GOOGLE_CREDENTIALS_JSON={"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}
-GOOGLE_DRIVE_FOLDER_ID=1AbCdEfGhIjKlMnOpQrStUvWxYz
-```
-
-> ⚠️ `GOOGLE_CREDENTIALS_JSON` paste **TOÀN BỘ nội dung file JSON** thành 1 dòng.
-
-Env vars mặc định (đã hardcode, chỉ cần set nếu muốn thay đổi):
-```
-CONTRACT_BASE_APP_TOKEN=W4trb7H8FaxrbbsjWLXlxru2gUe
-CONTRACT_BASE_TABLE_ID=tblWZAmV3MfFsJpo
-```
+1. Vào [Google Cloud Console](https://console.cloud.google.com) → project "KOC Contract"
+2. **APIs & Services → OAuth consent screen**:
+   - User Type: **External** → Create
+   - App name: `Jarvis Contract Bot`
+   - User support email: chọn email của bạn
+   - Developer contact: email của bạn → Save
+   - Scopes: bỏ qua → Save
+   - Test users: **Add Users** → thêm email Google của bạn → Save
+3. **APIs & Services → Credentials → + Create Credentials → OAuth client ID**:
+   - Application type: **Desktop app**
+   - Name: `Jarvis Contract`
+   - Click **Create**
+   - **Copy lại Client ID và Client Secret**
 
 ---
 
-### Bước 3: Push code lên GitHub
+### Bước 2: Lấy Refresh Token (chạy 1 lần trên máy local)
+
+```bash
+pip install google-auth-oauthlib google-api-python-client
+```
+
+M�� file `get_refresh_token.py`, paste **Client ID** và **Client Secret** vào:
+```python
+CLIENT_CONFIG = {
+    "installed": {
+        "client_id": "PASTE_CLIENT_ID_HERE",
+        "client_secret": "PASTE_CLIENT_SECRET_HERE",
+        ...
+    }
+}
+```
+
+Chạy:
+```bash
+python get_refresh_token.py
+```
+
+Browser mở ra → đăng nhập Google → cho phép quyền → terminal hiện:
+```
+GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxx
+GOOGLE_REFRESH_TOKEN=1//0xxx
+```
+
+---
+
+### Bước 3: Thêm Environment Variables trên Railway
+
+Vào Railway Dashboard → Jarvis project → Variables, thêm 4 biến:
+
+```
+GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxx
+GOOGLE_REFRESH_TOKEN=1//0xxx
+GOOGLE_DRIVE_FOLDER_ID=1MJ_PHIU973h_PJ5RlkhvDeJQAh0h9jgk
+```
+
+> Có thể xóa biến `GOOGLE_CREDENTIALS_JSON` cũ (không dùng nữa).
+
+---
+
+### Bước 4: Push code và Test
 
 ```bash
 cd jarvis-lark-bot
 git add .
-git commit -m "feat: add KOC contract generator v1.0.0 - Google Drive integration"
+git commit -m "feat: switch to OAuth2 for Google Drive upload"
 git push origin main
 ```
 
-Files mới:
-- `contract_generator.py` - Fill Word template
-- `google_drive_client.py` - Upload Google Drive
-- `templates/Mau_hop_dong_KOC.docx` - File mẫu hợp đồng
-- Updated: `main.py`, `requirements.txt`, `.env.example`
-
-Railway sẽ tự động deploy khi push.
-
----
-
-### Bước 4: Test endpoint
-
-Sau khi deploy xong, test bằng POST request:
-
-```bash
-curl -X POST https://jarvis-lark-bot-production.up.railway.app/test/contract
+Test sau khi deploy:
+```powershell
+Invoke-RestMethod -Method POST -Uri "https://jarvis-lark-bot-production.up.railway.app/test/contract"
 ```
 
-Response thành công:
+Kết quả thành công:
 ```json
 {
   "success": true,
-  "local_path": "/tmp/contract_.../HD_KOC_TEST001_Nguyen_Van_Test.docx",
   "google_docs_link": "https://docs.google.com/document/d/.../edit",
   "drive_configured": true
 }
@@ -92,51 +105,43 @@ Response thành công:
 ### Bước 5: Setup Lark Automation
 
 1. Mở Lark Base → Bảng Hợp đồng KOC
-2. Vào **Automation** (biểu tượng ⚡ góc trên phải)
-3. Tạo Automation mới:
+2. Vào **Automation** (⚡) → Tạo mới
 
-**Trigger:**
-- Chọn: "When button is clicked"
-- Button field: "Generate"
+**Trigger:** "When button is clicked" → Button: "Generate"
 
-**Action:**
-- Chọn: "Send HTTP Request"
+**Action:** "Send HTTP Request"
 - Method: **POST**
 - URL: `https://jarvis-lark-bot-production.up.railway.app/webhook/contract`
-- Headers:
-  ```
-  Content-Type: application/json
-  ```
-- Body (JSON):
-  ```json
-  {
-    "record_id": "{{Record ID}}",
-    "fields": {
-      "ID KOC": "{{ID KOC}}",
-      "Họ và Tên Bên B": "{{Họ và Tên Bên B}}",
-      "Địa chỉ Bên B": "{{Địa chỉ Bên B}}",
-      "MST Bên B": "{{MST Bên B}}",
-      "SDT Bên B": "{{SDT Bên B}}",
-      "CCCD Bên B": "{{CCCD Bên B}}",
-      "CCCD Ngày Cấp": "{{CCCD Ngày Cấp}}",
-      "CCCD Nơi Cấp": "{{CCCD Nơi Cấp}}",
-      "Gmail Bên B": "{{Gmail Bên B}}",
-      "STK bên B": "{{STK bên B}}"
-    }
+- Headers: `Content-Type: application/json`
+- Body:
+```json
+{
+  "record_id": "{{Record ID}}",
+  "fields": {
+    "ID KOC": "{{ID KOC}}",
+    "Họ và Tên Bên B": "{{Họ và Tên Bên B}}",
+    "Địa chỉ Bên B": "{{Địa chỉ Bên B}}",
+    "MST Bên B": "{{MST Bên B}}",
+    "SDT Bên B": "{{SDT Bên B}}",
+    "CCCD Bên B": "{{CCCD Bên B}}",
+    "CCCD Ngày Cấp": "{{CCCD Ngày Cấp}}",
+    "CCCD Nơi Cấp": "{{CCCD Nơi Cấp}}",
+    "Gmail Bên B": "{{Gmail Bên B}}",
+    "STK bên B": "{{STK bên B}}"
   }
-  ```
+}
+```
 
-4. **Enable** Automation → Save
+Enable → Save
 
 ---
 
 ### Cách sử dụng
 
-1. Điền đầy đủ thông tin Bên B trong Lark Base
-2. Click nút **Generate** ở cột cuối
-3. Đợi ~5 giây
-4. Cột **Status** → "Done" ✅
-5. Cột **OutputWord** → Link Google Docs (anyone with link can edit)
+1. Điền thông tin Bên B trong Lark Base
+2. Click **Generate** → đợi ~5 giây
+3. **Status** → "Done" ✅
+4. **OutputWord** → Link Google Docs (anyone with link can edit)
 
 ---
 
@@ -144,8 +149,7 @@ Response thành công:
 
 | Vấn đề | Giải pháp |
 |--------|-----------|
-| Status = "Failed" | Check log trên Railway: `railway logs` |
-| Google Drive error | Kiểm tra GOOGLE_CREDENTIALS_JSON đúng format |
-| Folder permission | Share folder Drive với email Service Account |
-| Automation không trigger | Kiểm tra button type = "Run Automation" |
-| Missing fields | Đảm bảo tất cả field names trong Automation body khớp với tên cột |
+| Status = "Failed" | Check Railway logs |
+| Token expired | Refresh token tự động renew, không cần làm gì |
+| 403 storage quota | Đảm bảo dùng OAuth2, không phải Service Account |
+| Automation không trigger | Button type = "Run Automation" |
