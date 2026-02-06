@@ -1077,94 +1077,89 @@ async def handle_contract_webhook(request: Request):
 def _process_contract_sync(record_id: str, fields: dict):
     """
     Background thread: generate contract → upload Drive → update Lark.
-    Hoàn toàn SYNC (pattern giống script filter_koc_thang10.py đã chạy OK).
+    Tối ưu: set permission + update Lark chạy SONG SONG.
     """
     import sys
     import traceback
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from lark_contract import update_record as lark_update_record
 
-    try:
-        print(f"🔄 [BG] Starting contract generation for record: {record_id}")
-        sys.stdout.flush()
+    t0 = _time.time()
 
+    try:
         ho_ten = fields.get("Họ và Tên Bên B", "")
         contract_data = parse_lark_record_to_contract_data(fields)
         id_koc = contract_data.get("id_koc", "N/A")
-        print(f"📝 [BG] Generating contract for: {ho_ten} (ID KOC: {id_koc})")
+        print(f"🔄 [BG] Start: {ho_ten} (ID: {id_koc})")
         sys.stdout.flush()
 
-        # 1. Generate Word file
+        # 1. Generate Word file (~50ms)
+        t1 = _time.time()
         output_path = generate_contract(contract_data)
-        print(f"✅ [BG] Contract file created: {output_path}")
+        print(f"✅ [BG] Generated: {_time.time()-t1:.1f}s")
         sys.stdout.flush()
 
-        # 2. Upload to Google Drive (sync)
+        # 2. Upload to Google Drive (~2-3s - bottleneck chính)
         drive_client = get_drive_client()
         if not drive_client:
             print("❌ [BG] Google Drive not configured")
-            lark_update_record(
-                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id,
-                {"Status": "Failed"}
-            )
+            lark_update_record(CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, {"Status": "Failed"})
             return
 
         today = datetime.now().strftime("%d-%m-%Y")
         file_name = f"{id_koc} {today}" if id_koc != "N/A" else f"HD_KOC {today}"
 
+        t2 = _time.time()
         drive_result = drive_client.upload_docx_as_gdoc(
-            file_path=output_path,
-            file_name=file_name,
-            set_permission=False,
+            file_path=output_path, file_name=file_name, set_permission=False,
         )
         file_id = drive_result["file_id"]
         gdoc_link = drive_result["web_view_link"]
-        print(f"📤 [BG] Uploaded to Google Drive: {gdoc_link}")
+        print(f"📤 [BG] Uploaded: {_time.time()-t2:.1f}s → {gdoc_link}")
         sys.stdout.flush()
 
-        # 3. Set permission (sync)
-        drive_client.set_anyone_edit(file_id)
-        print(f"🔓 [BG] Permission set for file: {file_id}")
-
-        # 4. Update Lark record (sync - dùng lark_contract.py)
+        # 3+4. Set permission + Update Lark SONG SONG (~1s thay vì ~2s)
+        t3 = _time.time()
         update_fields = {
             "Status": "Done",
-            "Kết quả": {
-                "text": gdoc_link,
-                "link": gdoc_link,
-            },
+            "Kết quả": {"text": gdoc_link, "link": gdoc_link},
         }
-        print(f"🔧 [BG] Updating Lark: app={CONTRACT_BASE_APP_TOKEN}, table={CONTRACT_BASE_TABLE_ID}, record={record_id}")
-        print(f"🔧 [BG] Fields: {update_fields}")
-        sys.stdout.flush()
 
-        result = lark_update_record(
-            CONTRACT_BASE_APP_TOKEN,
-            CONTRACT_BASE_TABLE_ID,
-            record_id,
-            update_fields,
-        )
-        print(f"📋 [BG] Lark update result: {result}")
-        sys.stdout.flush()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_perm = pool.submit(drive_client.set_anyone_edit, file_id)
+            f_lark = pool.submit(
+                lark_update_record,
+                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, update_fields,
+            )
+            # Wait for both
+            for f in as_completed([f_perm, f_lark]):
+                try:
+                    f.result()
+                except Exception as ex:
+                    print(f"⚠️ [BG] Parallel task error: {ex}")
 
-        # 5. Cleanup temp files
+        print(f"🔓📋 [BG] Permission + Lark: {_time.time()-t3:.1f}s")
+
+        # 5. Cleanup
         try:
             os.remove(output_path)
             os.rmdir(os.path.dirname(output_path))
         except:
             pass
 
-        print(f"✅ [BG] Contract done: {ho_ten} → {gdoc_link}")
+        total = _time.time() - t0
+        print(f"✅ [BG] Done: {ho_ten} → {total:.1f}s total")
         sys.stdout.flush()
 
     except Exception as e:
-        print(f"❌ [BG] Contract error: {e}")
+        print(f"❌ [BG] Error: {e}")
         print(traceback.format_exc())
         sys.stdout.flush()
         try:
             from lark_contract import update_record as lark_update_record_err
             lark_update_record_err(
-                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id,
-                {"Status": "Failed"}
+                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, {"Status": "Failed"}
             )
         except:
             pass
