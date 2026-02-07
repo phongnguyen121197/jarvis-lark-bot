@@ -178,58 +178,59 @@ def list_fields(app_token: str, table_id: str) -> list:
 def get_field_options(app_token: str, table_id: str, field_name: str) -> dict:
     """
     Get a single_select field's info including current options.
-    Returns: {"field_id": "...", "options": ["HDKOC", ...]} or empty dict
+    Returns: {"field_id": "...", "options": ["HDKOC", ...], "type": 3} or empty dict
     """
     fields = list_fields(app_token, table_id)
     for f in fields:
         if f.get("field_name") == field_name:
             field_id = f.get("field_id", "")
+            field_type = f.get("type", -1)
             options = []
             prop = f.get("property", {})
             if prop and prop.get("options"):
                 options = [opt.get("name", "") for opt in prop["options"]]
-            return {"field_id": field_id, "options": options, "property": prop}
+            print(f"🔍 Field '{field_name}': id={field_id}, type={field_type}, options={options}")
+            return {"field_id": field_id, "options": options, "property": prop, "type": field_type}
     return {}
 
 
-def add_field_options(app_token: str, table_id: str, field_id: str, existing_options: list, new_options: list) -> dict:
+def add_field_options(app_token: str, table_id: str, field_id: str, existing_options: list, new_options: list, field_name: str = "Template") -> dict:
     """
     Add new options to a single_select field while keeping existing ones.
-    
-    Args:
-        existing_options: Current option objects from field property
-        new_options: List of new option name strings to add
-    
-    Returns: API response
+    existing_options: raw option objects from field property (with id, name, color)
+    new_options: list of new option name strings to add
     """
     url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/fields/{field_id}"
     
-    # Build options list: keep existing names + add new names
-    seen = set()
+    # Keep existing options AS-IS (with their id/color) + add new with name only
     all_options = []
+    existing_names = set()
     for opt in existing_options:
-        name = opt.get("name", "") if isinstance(opt, dict) else str(opt)
-        if name and name not in seen:
-            all_options.append({"name": name})
-            seen.add(name)
+        if isinstance(opt, dict) and opt.get("name"):
+            all_options.append(opt)  # keep original id, color, name
+            existing_names.add(opt["name"])
+    
     for name in new_options:
-        if name not in seen:
+        if name not in existing_names:
             all_options.append({"name": name})
-            seen.add(name)
     
     body = {
-        "type": 3,  # 3 = single_select (required by Lark API)
+        "field_name": field_name,
+        "type": 3,
         "property": {
             "options": all_options
         }
     }
+    
+    print(f"🔧 [UpdateField] URL: {url}")
+    print(f"🔧 [UpdateField] Body: {body}")
     
     resp = requests.put(url, headers=headers(), json=body, timeout=15)
     data = resp.json()
     
     if data.get("code") != 0:
         print(f"❌ add_field_options error: {data.get('msg')} (code={data.get('code')})")
-        print(f"   Request body: {body}")
+        print(f"   Full response: {data}")
         return {"error": data.get("msg")}
     
     print(f"✅ Field options updated: +{len(new_options)} → {[o for o in new_options]}")

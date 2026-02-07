@@ -1412,10 +1412,12 @@ def _sync_templates_sync():
             return
 
         field_id = field_info["field_id"]
+        field_type = field_info.get("type", 3)
         current_options = set(field_info["options"])
         existing_property_options = field_info.get("property", {}).get("options", [])
 
-        print(f"📋 [Sync] Lark options: {sorted(current_options)}")
+        print(f"📋 [Sync] Lark options: {sorted(current_options)} (field_type={field_type})")
+        print(f"📋 [Sync] Raw options: {existing_property_options}")
 
         # 3. Find new templates
         new_names = drive_names - current_options
@@ -1426,7 +1428,8 @@ def _sync_templates_sync():
         # 4. Add new options
         result = add_field_options(
             CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID,
-            field_id, existing_property_options, sorted(new_names)
+            field_id, existing_property_options, sorted(new_names),
+            field_name="Template"
         )
 
         if "error" not in result:
