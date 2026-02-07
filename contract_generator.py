@@ -210,6 +210,26 @@ def _format_date_field(value) -> str:
     return s
 
 
+def _format_percent(value) -> str:
+    """
+    Convert percentage value to display string.
+    Handles: 0.05 → '5', '5%' → '5', '5' → '5', 0.1 → '10'
+    """
+    if not value and value != 0:
+        return ""
+    s = str(value).replace("%", "").strip()
+    try:
+        num = float(s)
+        # If value < 1, it's decimal format (0.05 = 5%)
+        if num < 1:
+            num = num * 100
+        # Remove trailing .0
+        result = f"{num:g}"
+        return result
+    except (ValueError, TypeError):
+        return s
+
+
 def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
     """
     Insert CCCD image after the title paragraph (e.g. 'Mặt trước CCCD').
@@ -217,11 +237,13 @@ def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
     """
     try:
         from docx.shared import Cm
+        import traceback
+        
         # Find first empty paragraph after the title to insert image
         target_para = None
         for idx in range(para_index + 1, min(para_index + 4, len(doc.paragraphs))):
             p = doc.paragraphs[idx]
-            if not p.text.strip() or p.text.strip() == "":
+            if not p.text.strip():
                 target_para = p
                 break
         
@@ -234,8 +256,10 @@ def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
         
         run = target_para.add_run()
         run.add_picture(image_path, width=Cm(14))
+        print(f"✅ Inserted CCCD image at para {para_index}: {image_path}")
     except Exception as e:
-        print(f"⚠️ Failed to insert CCCD image at para {para_index}: {e}")
+        print(f"⚠️ Failed to insert CCCD image at para {para_index}: {type(e).__name__}: {e}")
+        traceback.print_exc()
 
 
 def _number_to_vietnamese_words(number) -> str:
@@ -477,10 +501,10 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
         p29 = doc.paragraphs[29]
         if len(p29.runs) > 7:
             if hoa_hong_tu_nhien:
-                val = str(hoa_hong_tu_nhien).replace("%", "").strip()
+                val = _format_percent(hoa_hong_tu_nhien)
                 p29.runs[3].text = f"{val}% "
             if hoa_hong_chay_ads:
-                val = str(hoa_hong_chay_ads).replace("%", "").strip()
+                val = _format_percent(hoa_hong_chay_ads)
                 p29.runs[7].text = f" {val}% "
     
     # Para 36: "charminglae" in payment section → ID KOC
@@ -494,10 +518,18 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     cccd_sau_path = data.get("cccd_sau_path", "")
     
     if cccd_truoc_path and os.path.exists(cccd_truoc_path):
-        _insert_cccd_image(doc, 112, cccd_truoc_path)
+        fsize = os.path.getsize(cccd_truoc_path)
+        if fsize > 100:  # skip if file too small (corrupted)
+            _insert_cccd_image(doc, 112, cccd_truoc_path)
+        else:
+            print(f"⚠️ CCCD front file too small: {fsize} bytes")
     
     if cccd_sau_path and os.path.exists(cccd_sau_path):
-        _insert_cccd_image(doc, 117, cccd_sau_path)
+        fsize = os.path.getsize(cccd_sau_path)
+        if fsize > 100:
+            _insert_cccd_image(doc, 117, cccd_sau_path)
+        else:
+            print(f"⚠️ CCCD back file too small: {fsize} bytes")
     
     # === 3. Fill Table 2 - Payment Details (Phí dịch vụ) ===
     table_pay = doc.tables[2]
