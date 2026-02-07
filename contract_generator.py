@@ -562,16 +562,19 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     table_pay = doc.tables[2]
     
     thanh_tien = data.get("thanh_tien", "")
+    chi_phi = data.get("chi_phi", "")
     so_luong_clip = data.get("so_luong_clip", "")
     thue_tncn = data.get("thue_tncn", "")
     tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
     
-    # Row 1: Chi phí một clip → Số lượng, Đơn giá, Tổng cộng
+    # Row 1: Chi phí một clip → Số lượng, Đơn giá(Chi phí), Tổng cộng(Thành tiền)
     if so_luong_clip:
         _set_cell_text(table_pay.rows[1].cells[2], str(int(float(str(so_luong_clip)))), bold=True, font_size=13)
+    if chi_phi:
+        formatted_cp = _format_currency_vn(chi_phi)
+        _set_cell_text(table_pay.rows[1].cells[3], formatted_cp, bold=True, font_size=13)
     if thanh_tien:
         formatted_tt = _format_currency_vn(thanh_tien)
-        _set_cell_text(table_pay.rows[1].cells[3], formatted_tt, bold=True, font_size=13)
         _set_cell_text(table_pay.rows[1].cells[4], formatted_tt, bold=True, font_size=13)
     
     # Row 2: TNCN (10%) → Đơn giá, Tổng cộng
@@ -638,6 +641,7 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "gmail": fields.get("Gmail Bên B", ""),
         "stk": fields.get("STK bên B", ""),
         # Payment fields (Table 2)
+        "chi_phi": fields.get("Chi phí", ""),
         "thanh_tien": fields.get("Thành Tiền", fields.get("Thành Tiên", "")),
         "so_luong_clip": fields.get("Số lượng clip", ""),
         "thue_tncn": fields.get("Thuế TNCN", ""),
