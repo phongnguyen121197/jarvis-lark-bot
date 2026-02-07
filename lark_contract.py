@@ -204,10 +204,18 @@ def add_field_options(app_token: str, table_id: str, field_id: str, existing_opt
     """
     url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/fields/{field_id}"
     
-    # Build options list: keep existing + add new
-    all_options = list(existing_options)  # preserve existing with their colors/ids
+    # Build options list: keep existing names + add new names
+    seen = set()
+    all_options = []
+    for opt in existing_options:
+        name = opt.get("name", "") if isinstance(opt, dict) else str(opt)
+        if name and name not in seen:
+            all_options.append({"name": name})
+            seen.add(name)
     for name in new_options:
-        all_options.append({"name": name})
+        if name not in seen:
+            all_options.append({"name": name})
+            seen.add(name)
     
     body = {
         "type": 3,  # 3 = single_select (required by Lark API)
