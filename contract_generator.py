@@ -26,9 +26,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Template path - stored in repo
+# Template path - local fallback
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 TEMPLATE_HDKOC = os.path.join(TEMPLATE_DIR, "Mau_hop_dong_KOC.docx")
+
+# Template name mapping: Lark "Template" field value → Drive search name
+TEMPLATE_MAP = {
+    "HDKOC": "HDKOC",
+    # Add more: "HDDV": "HDDV", "HDHTM": "HDHTM"
+}
 
 
 # ╔════════════════════════════════════════════════════════════════╗
@@ -418,7 +424,17 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     Returns:
         Path to generated .docx file
     """
-    template = template_path or TEMPLATE_HDKOC
+    template = template_path
+    if not template:
+        # Try to get template from Drive (with cache)
+        template_key = data.get("template", "HDKOC")
+        drive_name = TEMPLATE_MAP.get(template_key, template_key)
+        try:
+            from google_drive_client import get_template_path
+            template = get_template_path(drive_name, fallback_path=TEMPLATE_HDKOC)
+        except Exception as e:
+            print(f"⚠️ Drive template fetch failed, using local: {e}")
+            template = TEMPLATE_HDKOC
     
     if not os.path.exists(template):
         raise FileNotFoundError(f"Template not found: {template}")
@@ -634,4 +650,6 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         # CCCD image paths (populated by main.py after downloading from Lark)
         "cccd_truoc_path": fields.get("cccd_truoc_path", ""),
         "cccd_sau_path": fields.get("cccd_sau_path", ""),
+        # Template selection
+        "template": fields.get("Template", "HDKOC"),
     }
