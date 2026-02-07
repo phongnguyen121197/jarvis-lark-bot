@@ -158,3 +158,69 @@ def fetch_cccd_images(app_token: str, table_id: str, record_id: str, tmp_dir: st
         print(f"⚠️ fetch_cccd_images error: {e}")
     
     return result
+
+
+# ╔════════════════════════════════════════════════════════════════╗
+# ║                   FIELD OPTIONS MANAGEMENT                     ║
+# ╚════════════════════════════════════════════════════════════════╝
+
+def list_fields(app_token: str, table_id: str) -> list:
+    """List all fields in a Bitable table."""
+    url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    resp = requests.get(url, headers=headers(), timeout=15)
+    data = resp.json()
+    if data.get("code") != 0:
+        print(f"❌ list_fields error: {data.get('msg')}")
+        return []
+    return data.get("data", {}).get("items", [])
+
+
+def get_field_options(app_token: str, table_id: str, field_name: str) -> dict:
+    """
+    Get a single_select field's info including current options.
+    Returns: {"field_id": "...", "options": ["HDKOC", ...]} or empty dict
+    """
+    fields = list_fields(app_token, table_id)
+    for f in fields:
+        if f.get("field_name") == field_name:
+            field_id = f.get("field_id", "")
+            options = []
+            prop = f.get("property", {})
+            if prop and prop.get("options"):
+                options = [opt.get("name", "") for opt in prop["options"]]
+            return {"field_id": field_id, "options": options, "property": prop}
+    return {}
+
+
+def add_field_options(app_token: str, table_id: str, field_id: str, existing_options: list, new_options: list) -> dict:
+    """
+    Add new options to a single_select field while keeping existing ones.
+    
+    Args:
+        existing_options: Current option objects from field property
+        new_options: List of new option name strings to add
+    
+    Returns: API response
+    """
+    url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/fields/{field_id}"
+    
+    # Build options list: keep existing + add new
+    all_options = list(existing_options)  # preserve existing with their colors/ids
+    for name in new_options:
+        all_options.append({"name": name})
+    
+    body = {
+        "property": {
+            "options": all_options
+        }
+    }
+    
+    resp = requests.put(url, headers=headers(), json=body, timeout=15)
+    data = resp.json()
+    
+    if data.get("code") != 0:
+        print(f"❌ add_field_options error: {data.get('msg')}")
+        return {"error": data.get("msg")}
+    
+    print(f"✅ Field options updated: +{len(new_options)} → {[o for o in new_options]}")
+    return data.get("data", {})

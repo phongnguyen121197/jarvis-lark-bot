@@ -1329,6 +1329,119 @@ async def test_contract_generate():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
+# ╔════════════════════════════════════════════════════════════════╗
+# ║             SYNC TEMPLATES: Drive → Lark Base dropdown         ║
+# ╚════════════════════════════════════════════════════════════════╝
+
+@app.post("/webhook/sync-templates")
+async def handle_sync_templates(request: Request):
+    """
+    Webhook quét Drive folder "Templates" → tự thêm option mới vào
+    cột "Template" (single_select) trong Lark Base.
+    
+    Trigger: Button click trong Lark Automation.
+    """
+    try:
+        print("🔄 Sync templates webhook received")
+
+        thread = threading.Thread(
+            target=_sync_templates_sync,
+            daemon=True,
+        )
+        thread.start()
+
+        return {"success": True, "status": "syncing"}
+
+    except Exception as e:
+        print(f"❌ Sync templates error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def _sync_templates_sync():
+    """Background: scan Drive template folder → update Lark field options."""
+    import sys
+    import time as _time
+    from lark_contract import get_field_options, add_field_options
+    from google_drive_client import get_drive_client, GOOGLE_DRIVE_TEMPLATE_FOLDER_ID
+
+    t0 = _time.time()
+
+    try:
+        # 1. Scan Drive folder
+        drive_client = get_drive_client()
+        if not drive_client:
+            print("❌ [Sync] Drive client not available")
+            return
+
+        folder_id = GOOGLE_DRIVE_TEMPLATE_FOLDER_ID
+        if not folder_id:
+            print("❌ [Sync] GOOGLE_DRIVE_TEMPLATE_FOLDER_ID not set")
+            return
+
+        query = f"'{folder_id}' in parents and trashed = false"
+        result = drive_client.service.files().list(
+            q=query,
+            fields="files(id, name, mimeType)",
+            pageSize=100,
+        ).execute()
+        drive_files = result.get("files", [])
+
+        # Extract template names from filenames (remove extension)
+        drive_names = set()
+        for f in drive_files:
+            name = f["name"]
+            # Remove extensions: .docx, .doc
+            for ext in [".docx", ".doc"]:
+                if name.lower().endswith(ext):
+                    name = name[:-len(ext)]
+                    break
+            drive_names.add(name.strip())
+
+        print(f"📁 [Sync] Drive templates: {sorted(drive_names)}")
+
+        if not drive_names:
+            print("⚠️ [Sync] No templates found in Drive folder")
+            return
+
+        # 2. Get current Lark field options
+        field_info = get_field_options(
+            CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, "Template"
+        )
+        if not field_info:
+            print("❌ [Sync] Field 'Template' not found in Lark Base")
+            return
+
+        field_id = field_info["field_id"]
+        current_options = set(field_info["options"])
+        existing_property_options = field_info.get("property", {}).get("options", [])
+
+        print(f"📋 [Sync] Lark options: {sorted(current_options)}")
+
+        # 3. Find new templates
+        new_names = drive_names - current_options
+        if not new_names:
+            print(f"✅ [Sync] Already in sync — no new templates ({_time.time()-t0:.1f}s)")
+            return
+
+        # 4. Add new options
+        result = add_field_options(
+            CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID,
+            field_id, existing_property_options, sorted(new_names)
+        )
+
+        if "error" not in result:
+            print(f"✅ [Sync] Added {len(new_names)} templates: {sorted(new_names)} ({_time.time()-t0:.1f}s)")
+        else:
+            print(f"❌ [Sync] Failed: {result}")
+
+    except Exception as e:
+        print(f"❌ [Sync] Error: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    sys.stdout.flush()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
