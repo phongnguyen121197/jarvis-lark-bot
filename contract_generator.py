@@ -183,6 +183,61 @@ def _format_currency_vn(amount) -> str:
         return str(amount)
 
 
+def _format_date_field(value) -> str:
+    """
+    Convert Lark date field to dd/mm/yyyy string.
+    Handles: timestamp in ms (e.g. 1738886400000), date string, or dd/mm/yyyy.
+    """
+    if not value:
+        return ""
+    s = str(value).strip()
+    
+    # Already in dd/mm/yyyy format
+    if "/" in s and len(s) <= 10:
+        return s
+    
+    # Timestamp in milliseconds
+    try:
+        ts = float(s)
+        if ts > 1e12:  # ms
+            ts = ts / 1000
+        from datetime import datetime as _dt
+        dt = _dt.fromtimestamp(ts)
+        return dt.strftime("%d/%m/%Y")
+    except (ValueError, TypeError, OSError):
+        pass
+    
+    return s
+
+
+def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
+    """
+    Insert CCCD image after the title paragraph (e.g. 'Mặt trước CCCD').
+    Image fits within page width (~14cm for contract margins).
+    """
+    try:
+        from docx.shared import Cm
+        # Find first empty paragraph after the title to insert image
+        target_para = None
+        for idx in range(para_index + 1, min(para_index + 4, len(doc.paragraphs))):
+            p = doc.paragraphs[idx]
+            if not p.text.strip() or p.text.strip() == "":
+                target_para = p
+                break
+        
+        if target_para is None:
+            target_para = doc.paragraphs[para_index]
+        
+        # Clear paragraph and add image
+        for run in target_para.runs:
+            run.text = ""
+        
+        run = target_para.add_run()
+        run.add_picture(image_path, width=Cm(14))
+    except Exception as e:
+        print(f"⚠️ Failed to insert CCCD image at para {para_index}: {e}")
+
+
 def _number_to_vietnamese_words(number) -> str:
     """
     Chuyển số thành chữ tiếng Việt.
@@ -355,6 +410,7 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     sdt = data.get("sdt", "")
     gmail = data.get("gmail", "")
     cccd = data.get("cccd", "")
+    id_koc = data.get("id_koc", "")
     cccd_ngay_cap = _format_date_vn(data.get("cccd_ngay_cap", ""))
     cccd_noi_cap = data.get("cccd_noi_cap", "")
     stk = data.get("stk", "")
@@ -390,6 +446,58 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     # Row 6: STK: [value in cell 1]
     if stk:
         _set_cell_text(table_b.rows[6].cells[1], str(stk))
+    
+    # === 3. Fill Paragraph-level data (Điều 2, 3) ===
+    thuong_hieu = data.get("thuong_hieu", "")
+    ngay_du_kien_air = data.get("ngay_du_kien_air", "")
+    hoa_hong_tu_nhien = data.get("hoa_hong_tu_nhien", "")
+    hoa_hong_chay_ads = data.get("hoa_hong_chay_ads", "")
+    
+    # Para 24: "Kallé Feum" → Thương hiệu
+    if thuong_hieu:
+        p24 = doc.paragraphs[24]
+        if len(p24.runs) > 18:
+            p24.runs[16].text = str(thuong_hieu)  # Replace "Kallé"
+            p24.runs[17].text = ""                 # Clear space
+            p24.runs[18].text = ""                 # Clear "Feum"
+    
+    # Para 25: "08/02/2026" → Ngày dự kiến air, "charminglae" → ID KOC
+    if ngay_du_kien_air or id_koc:
+        p25 = doc.paragraphs[25]
+        if len(p25.runs) > 30:
+            if ngay_du_kien_air:
+                # Convert timestamp (ms) to date string if needed
+                date_str = _format_date_field(ngay_du_kien_air)
+                p25.runs[12].text = date_str
+            if id_koc and id_koc != "N/A":
+                p25.runs[30].text = str(id_koc)
+    
+    # Para 29: Commission "5% tự nhiên + 5% chạy ads"
+    if hoa_hong_tu_nhien or hoa_hong_chay_ads:
+        p29 = doc.paragraphs[29]
+        if len(p29.runs) > 7:
+            if hoa_hong_tu_nhien:
+                val = str(hoa_hong_tu_nhien).replace("%", "").strip()
+                p29.runs[3].text = f"{val}% "
+            if hoa_hong_chay_ads:
+                val = str(hoa_hong_chay_ads).replace("%", "").strip()
+                p29.runs[7].text = f" {val}% "
+    
+    # Para 36: "charminglae" in payment section → ID KOC
+    if id_koc and id_koc != "N/A":
+        p36 = doc.paragraphs[36]
+        if len(p36.runs) > 15:
+            p36.runs[15].text = str(id_koc)
+    
+    # === 4. Insert CCCD images ===
+    cccd_truoc_path = data.get("cccd_truoc_path", "")
+    cccd_sau_path = data.get("cccd_sau_path", "")
+    
+    if cccd_truoc_path and os.path.exists(cccd_truoc_path):
+        _insert_cccd_image(doc, 112, cccd_truoc_path)
+    
+    if cccd_sau_path and os.path.exists(cccd_sau_path):
+        _insert_cccd_image(doc, 117, cccd_sau_path)
     
     # === 3. Fill Table 2 - Payment Details (Phí dịch vụ) ===
     table_pay = doc.tables[2]
@@ -475,4 +583,12 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "so_luong_clip": fields.get("Số lượng clip", ""),
         "thue_tncn": fields.get("Thuế TNCN", ""),
         "tong_gia_tri_sau_thue": fields.get("Tổng giá trị sau thuế", ""),
+        # Paragraph fields (Điều 2, 3)
+        "thuong_hieu": fields.get("Thương hiệu", ""),
+        "ngay_du_kien_air": fields.get("Ngày dự kiến air", ""),
+        "hoa_hong_tu_nhien": fields.get("% Hoa hồng tự nhiên", fields.get("Hoa hồng tự nhiên", "")),
+        "hoa_hong_chay_ads": fields.get("% Hoa hồng chạy ads", fields.get("Hoa hồng chạy ads", "")),
+        # CCCD image paths (populated by main.py after downloading from Lark)
+        "cccd_truoc_path": fields.get("cccd_truoc_path", ""),
+        "cccd_sau_path": fields.get("cccd_sau_path", ""),
     }

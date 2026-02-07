@@ -95,3 +95,62 @@ def get_record(app_token: str, table_id: str, record_id: str) -> dict:
         return {"error": data.get("msg", "Unknown"), "code": data.get("code")}
 
     return data.get("data", {}).get("record", {})
+
+
+def download_attachment(file_token: str, save_path: str) -> bool:
+    """
+    Download a Lark Base attachment file by file_token.
+    Uses Drive media download API.
+    Returns True if successful.
+    """
+    url = f"{LARK_API}/drive/v1/medias/{file_token}/download"
+    h = {"Authorization": f"Bearer {get_token()}"}
+    
+    try:
+        resp = requests.get(url, headers=h, timeout=30, stream=True)
+        if resp.status_code == 200:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"✅ Downloaded attachment: {file_token} → {save_path}")
+            return True
+        else:
+            print(f"❌ Download attachment failed: {resp.status_code} {resp.text[:200]}")
+            return False
+    except Exception as e:
+        print(f"❌ Download attachment error: {e}")
+        return False
+
+
+def fetch_cccd_images(app_token: str, table_id: str, record_id: str, tmp_dir: str) -> dict:
+    """
+    Fetch CCCD front/back images from a Lark Base record.
+    
+    Returns dict with paths:
+        {"cccd_truoc_path": "/path/to/front.jpg", "cccd_sau_path": "/path/to/back.jpg"}
+    """
+    result = {"cccd_truoc_path": "", "cccd_sau_path": ""}
+    
+    try:
+        record = get_record(app_token, table_id, record_id)
+        if not record or "error" in record:
+            return result
+        
+        fields = record.get("fields", {})
+        
+        # Lark Base attachment fields are arrays of objects with file_token
+        for field_name, key in [("Mặt trước CCCD", "cccd_truoc_path"), ("Mặt sau CCCD", "cccd_sau_path")]:
+            attachments = fields.get(field_name, [])
+            if attachments and isinstance(attachments, list) and len(attachments) > 0:
+                att = attachments[0]  # Take first attachment
+                file_token = att.get("file_token", "")
+                name = att.get("name", "cccd.jpg")
+                if file_token:
+                    save_path = os.path.join(tmp_dir, f"{key}_{name}")
+                    if download_attachment(file_token, save_path):
+                        result[key] = save_path
+    except Exception as e:
+        print(f"⚠️ fetch_cccd_images error: {e}")
+    
+    return result

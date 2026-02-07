@@ -1082,8 +1082,9 @@ def _process_contract_sync(record_id: str, fields: dict):
     import sys
     import traceback
     import time as _time
+    import tempfile
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from lark_contract import update_record as lark_update_record
+    from lark_contract import update_record as lark_update_record, fetch_cccd_images
 
     t0 = _time.time()
 
@@ -1093,6 +1094,22 @@ def _process_contract_sync(record_id: str, fields: dict):
         id_koc = contract_data.get("id_koc", "N/A")
         print(f"🔄 [BG] Start: {ho_ten} (ID: {id_koc})")
         sys.stdout.flush()
+
+        # 0. Download CCCD images from Lark Base attachments
+        try:
+            tmp_dir = tempfile.mkdtemp(prefix="cccd_")
+            cccd_paths = fetch_cccd_images(
+                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, tmp_dir
+            )
+            contract_data.update(cccd_paths)
+            if cccd_paths.get("cccd_truoc_path"):
+                print(f"📷 [BG] CCCD front downloaded")
+            if cccd_paths.get("cccd_sau_path"):
+                print(f"📷 [BG] CCCD back downloaded")
+            sys.stdout.flush()
+        except Exception as cccd_err:
+            print(f"⚠️ [BG] CCCD download skipped: {cccd_err}")
+            sys.stdout.flush()
 
         # 1. Generate Word file (~50ms)
         t1 = _time.time()
@@ -1111,9 +1128,21 @@ def _process_contract_sync(record_id: str, fields: dict):
         file_name = f"{id_koc} {today}" if id_koc != "N/A" else f"HD_KOC {today}"
 
         t2 = _time.time()
-        drive_result = drive_client.upload_docx_as_gdoc(
-            file_path=output_path, file_name=file_name, set_permission=False,
-        )
+        drive_result = None
+        for attempt in range(3):
+            try:
+                drive_result = drive_client.upload_docx_as_gdoc(
+                    file_path=output_path, file_name=file_name, set_permission=False,
+                )
+                break
+            except (BrokenPipeError, ConnectionError, OSError) as upload_err:
+                print(f"⚠️ [BG] Upload attempt {attempt+1}/3 failed: {upload_err}")
+                sys.stdout.flush()
+                if attempt < 2:
+                    _time.sleep(2 * (attempt + 1))  # 2s, 4s backoff
+                    drive_client = get_drive_client(force_new=True)  # rebuild stale connection
+                else:
+                    raise
         file_id = drive_result["file_id"]
         gdoc_link = drive_result["web_view_link"]
         print(f"📤 [BG] Uploaded: {_time.time()-t2:.1f}s → {gdoc_link}")
