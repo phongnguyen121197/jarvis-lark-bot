@@ -225,13 +225,16 @@ def get_template_path(template_name: str = "HDKOC", fallback_path: str = None) -
         local_path = os.path.join(TEMPLATE_CACHE_DIR, f"{template_name}.docx")
         
         # Export Google Docs as docx, or download directly for .docx files
-        if "document" in file_info.get("mimeType", ""):
-            # Google Docs → export as docx
+        mime = file_info.get("mimeType", "")
+        print(f"📄 Template file: {file_name} (mime={mime})")
+        if mime == "application/vnd.google-apps.document":
+            # Google Docs native → export as docx
             request = client.service.files().export_media(
                 fileId=file_id,
                 mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         else:
+            # Uploaded .docx or other files → download directly
             request = client.service.files().get_media(fileId=file_id)
         
         with open(local_path, "wb") as f:
