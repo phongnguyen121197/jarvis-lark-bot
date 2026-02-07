@@ -1,6 +1,6 @@
 """
 Contract Generator - Fill Word template with KOC data from Lark Base
-Version 1.0.0
+Version 1.1.0
 
 Fills Table 1 (Bên B info) in the contract template:
   Row 0: Tên Bên B
@@ -10,6 +10,8 @@ Fills Table 1 (Bên B info) in the contract template:
   Row 4: Gmail
   Row 5: CCCD + ngày cấp + nơi cấp
   Row 6: STK
+
+v1.1: Thêm _normalize_formatting() - chuẩn hóa lề, spacing, indent.
 """
 
 import os
@@ -18,7 +20,8 @@ import tempfile
 from datetime import datetime
 from typing import Dict, Optional
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Cm, Emu
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,119 @@ logger = logging.getLogger(__name__)
 # Template path - stored in repo
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 TEMPLATE_HDKOC = os.path.join(TEMPLATE_DIR, "Mau_hop_dong_KOC.docx")
+
+
+# ╔════════════════════════════════════════════════════════════════╗
+# ║              FORMAT CHUẨN HỢP ĐỒNG VIỆT NAM                   ║
+# ╚════════════════════════════════════════════════════════════════╝
+
+# Lề trang chuẩn hợp đồng VN (Nghị định 30/2020/NĐ-CP)
+MARGIN_TOP = Cm(2)        # Lề trên: 2cm
+MARGIN_BOTTOM = Cm(2)     # Lề dưới: 2cm
+MARGIN_LEFT = Cm(2.5)     # Lề trái: 2.5cm (đóng gáy)
+MARGIN_RIGHT = Cm(1.5)    # Lề phải: 1.5cm
+
+# Spacing chuẩn
+LINE_SPACING = 1.15                 # Khoảng cách dòng
+SPACE_AFTER_NORMAL = Pt(3)          # Sau đoạn thường: 3pt
+SPACE_AFTER_HEADING = Pt(6)         # Sau tiêu đề điều: 6pt
+SPACE_AFTER_MAX = Pt(8)             # Tối đa cho phép: 8pt
+SPACE_BEFORE_HEADING = Pt(6)        # Trước tiêu đề điều: 6pt
+
+# Thresholds để phát hiện
+BIG_SPACE_THRESHOLD = Pt(10)        # > 10pt coi là quá lớn
+HEADING_KEYWORDS = ["ĐIỀU", "CỘNG HOÀ", "HỢP ĐỒNG", "ĐẠI DIỆN"]
+
+
+def _is_heading_paragraph(text: str) -> bool:
+    """Kiểm tra paragraph có phải tiêu đề/heading không."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    for kw in HEADING_KEYWORDS:
+        if stripped.startswith(kw):
+            return True
+    return False
+
+
+def _normalize_formatting(doc: Document):
+    """
+    Chuẩn hóa formatting toàn bộ document theo tiêu chuẩn hợp đồng VN.
+    
+    Fixes:
+    1. Lề trang → chuẩn VN (2.5 / 1.5 / 2 / 2 cm)
+    2. space_after quá lớn → cap lại 3-6pt
+    3. Indent âm → 0
+    4. Line spacing → 1.15
+    5. Ngày tháng → căn phải, bỏ tab thừa
+    """
+    
+    # === 1. Chuẩn hóa lề trang ===
+    for section in doc.sections:
+        section.top_margin = MARGIN_TOP
+        section.bottom_margin = MARGIN_BOTTOM
+        section.left_margin = MARGIN_LEFT
+        section.right_margin = MARGIN_RIGHT
+    
+    # === 2. Chuẩn hóa paragraphs ===
+    for i, para in enumerate(doc.paragraphs):
+        pf = para.paragraph_format
+        text = para.text.strip()
+        
+        # --- Fix indent âm ---
+        if pf.first_line_indent is not None and pf.first_line_indent < 0:
+            pf.first_line_indent = 0
+        
+        # --- Fix space_after quá lớn ---
+        if pf.space_after is not None and pf.space_after > BIG_SPACE_THRESHOLD:
+            if _is_heading_paragraph(text):
+                pf.space_after = SPACE_AFTER_HEADING
+            else:
+                pf.space_after = SPACE_AFTER_NORMAL
+        
+        # --- Chuẩn hóa line spacing ---
+        # Chỉ fix nếu gần 1.15 (template dùng 1.07-1.15)
+        if pf.line_spacing is not None and isinstance(pf.line_spacing, float):
+            if 1.0 <= pf.line_spacing <= 1.2:
+                pf.line_spacing = LINE_SPACING
+        
+        # --- Fix dòng ngày tháng: bỏ tab, căn phải ---
+        if "Hà Nội, ngày" in text:
+            # Xóa tab thừa, giữ text gọn
+            clean_date = text.replace("\t", "").strip()
+            if para.runs:
+                for run in para.runs:
+                    run.text = ""
+                para.runs[0].text = clean_date
+            pf.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            pf.first_line_indent = 0
+            pf.space_after = SPACE_AFTER_HEADING
+        
+        # --- Fix dòng "(Về việc...)" ---
+        if text.startswith("(Về việc"):
+            pf.space_after = SPACE_AFTER_HEADING
+        
+        # --- Fix tiêu đề ĐIỀU: thêm space_before ---
+        if text.startswith("ĐIỀU"):
+            pf.space_before = SPACE_BEFORE_HEADING
+            pf.space_after = SPACE_AFTER_HEADING
+    
+    # === 3. Chuẩn hóa bảng (table cells) ===
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    pf = para.paragraph_format
+                    # Fix indent âm trong bảng
+                    if pf.first_line_indent is not None and pf.first_line_indent < 0:
+                        pf.first_line_indent = 0
+                    # Fix space_after trong bảng
+                    if pf.space_after is not None and pf.space_after > BIG_SPACE_THRESHOLD:
+                        pf.space_after = Pt(2)
+                    # Chuẩn hóa line spacing trong bảng
+                    if pf.line_spacing is not None and isinstance(pf.line_spacing, float):
+                        if 1.0 <= pf.line_spacing <= 1.2:
+                            pf.line_spacing = LINE_SPACING
 
 
 def _set_cell_text(cell, text: str, bold: bool = False, font_size: float = None):
@@ -47,6 +163,105 @@ def _set_cell_text(cell, text: str, bold: bool = False, font_size: float = None)
         run.bold = bold
         if font_size:
             run.font.size = Pt(font_size)
+
+
+def _format_currency_vn(amount) -> str:
+    """
+    Format number as Vietnamese currency: 11700000 → '11.700.000'
+    Handles: int, float, string with commas/dots.
+    """
+    if not amount and amount != 0:
+        return ""
+    try:
+        # Clean string input
+        s = str(amount).replace(",", "").replace(".", "").strip()
+        num = int(float(s)) if s else 0
+        if num == 0:
+            return "0"
+        return f"{num:,}".replace(",", ".")
+    except (ValueError, TypeError):
+        return str(amount)
+
+
+def _number_to_vietnamese_words(number) -> str:
+    """
+    Chuyển số thành chữ tiếng Việt.
+    Ví dụ: 10530000 → 'Mười triệu năm trăm ba mươi nghìn đồng'
+    """
+    try:
+        n = int(float(str(number).replace(",", "").replace(".", "").strip()))
+    except (ValueError, TypeError):
+        return ""
+    
+    if n == 0:
+        return "Không đồng"
+    
+    ones = ["", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
+    
+    def _read_group_3(num):
+        """Đọc nhóm 3 chữ số."""
+        if num == 0:
+            return ""
+        
+        h = num // 100
+        t = (num % 100) // 10
+        u = num % 10
+        
+        parts = []
+        
+        if h > 0:
+            parts.append(f"{ones[h]} trăm")
+            if t == 0 and u > 0:
+                parts.append("lẻ")
+        
+        if t > 1:
+            parts.append(f"{ones[t]} mươi")
+            if u == 1:
+                parts.append("mốt")
+            elif u == 4:
+                parts.append("tư")
+            elif u == 5:
+                parts.append("lăm")
+            elif u > 0:
+                parts.append(ones[u])
+        elif t == 1:
+            parts.append("mười")
+            if u == 5:
+                parts.append("lăm")
+            elif u > 0:
+                parts.append(ones[u])
+        elif t == 0 and h > 0 and u > 0:
+            parts.append(ones[u])
+        elif t == 0 and h == 0 and u > 0:
+            parts.append(ones[u])
+        
+        return " ".join(parts)
+    
+    units = ["", "nghìn", "triệu", "tỷ"]
+    
+    groups = []
+    temp = n
+    while temp > 0:
+        groups.append(temp % 1000)
+        temp //= 1000
+    
+    result_parts = []
+    for i in range(len(groups) - 1, -1, -1):
+        if groups[i] > 0:
+            text = _read_group_3(groups[i])
+            if text:
+                if i < len(units):
+                    result_parts.append(f"{text} {units[i]}".strip())
+                else:
+                    result_parts.append(text)
+        elif i > 0 and any(groups[j] > 0 for j in range(i)):
+            # Nhóm = 0 nhưng còn nhóm sau có giá trị → thêm "không trăm"
+            pass
+    
+    result = " ".join(result_parts).strip()
+    # Capitalize first letter
+    result = result[0].upper() + result[1:] if result else ""
+    return f"{result} đồng."
 
 
 def _format_date_vn(date_value) -> str:
@@ -176,7 +391,45 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     if stk:
         _set_cell_text(table_b.rows[6].cells[1], str(stk))
     
-    # === 3. Save output ===
+    # === 3. Fill Table 2 - Payment Details (Phí dịch vụ) ===
+    table_pay = doc.tables[2]
+    
+    thanh_tien = data.get("thanh_tien", "")
+    so_luong_clip = data.get("so_luong_clip", "")
+    thue_tncn = data.get("thue_tncn", "")
+    tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
+    
+    # Row 1: Chi phí một clip → Số lượng, Đơn giá, Tổng cộng
+    if so_luong_clip:
+        _set_cell_text(table_pay.rows[1].cells[2], str(int(float(str(so_luong_clip)))), bold=True, font_size=13)
+    if thanh_tien:
+        formatted_tt = _format_currency_vn(thanh_tien)
+        _set_cell_text(table_pay.rows[1].cells[3], formatted_tt, bold=True, font_size=13)
+        _set_cell_text(table_pay.rows[1].cells[4], formatted_tt, bold=True, font_size=13)
+    
+    # Row 2: TNCN (10%) → Đơn giá, Tổng cộng
+    if thue_tncn:
+        formatted_tncn = _format_currency_vn(thue_tncn)
+        _set_cell_text(table_pay.rows[2].cells[3], formatted_tncn, bold=True, font_size=13)
+        _set_cell_text(table_pay.rows[2].cells[4], formatted_tncn, bold=True, font_size=13)
+    
+    # Row 3: Tổng giá trị sau thuế → Tổng cộng
+    if tong_gia_tri_sau_thue:
+        formatted_tgst = _format_currency_vn(tong_gia_tri_sau_thue)
+        _set_cell_text(table_pay.rows[3].cells[4], formatted_tgst, bold=True, font_size=13)
+    
+    # Row 4: Bằng chữ → convert to Vietnamese words
+    if tong_gia_tri_sau_thue:
+        bang_chu = f"Bằng chữ: {_number_to_vietnamese_words(tong_gia_tri_sau_thue)}"
+        _set_cell_text(table_pay.rows[4].cells[0], bang_chu, bold=True)
+        # Set italic on the run
+        if table_pay.rows[4].cells[0].paragraphs[0].runs:
+            table_pay.rows[4].cells[0].paragraphs[0].runs[0].italic = True
+    
+    # === 3. Chuẩn hóa formatting toàn bộ ===
+    _normalize_formatting(doc)
+    
+    # === 4. Save output ===
     if output_path:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         doc.save(output_path)
@@ -217,4 +470,9 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "cccd_noi_cap": fields.get("CCCD Nơi Cấp", ""),
         "gmail": fields.get("Gmail Bên B", ""),
         "stk": fields.get("STK bên B", ""),
+        # Payment fields (Table 2)
+        "thanh_tien": fields.get("Thành Tiền", fields.get("Thành Tiên", "")),
+        "so_luong_clip": fields.get("Số lượng clip", ""),
+        "thue_tncn": fields.get("Thuế TNCN", ""),
+        "tong_gia_tri_sau_thue": fields.get("Tổng giá trị sau thuế", ""),
     }
