@@ -567,6 +567,25 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     thue_tncn = data.get("thue_tncn", "")
     tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
     
+    # Fallback: calculate chi_phi from thanh_tien / so_luong_clip
+    if not chi_phi and thanh_tien and so_luong_clip:
+        try:
+            chi_phi = str(int(float(str(thanh_tien)) / float(str(so_luong_clip))))
+            print(f"💰 Chi phí calculated: {thanh_tien} / {so_luong_clip} = {chi_phi}")
+        except (ValueError, ZeroDivisionError):
+            pass
+    
+    # Auto-calculate chi_phi (đơn giá) = thanh_tien / so_luong_clip if not provided
+    if not chi_phi and thanh_tien and so_luong_clip:
+        try:
+            tt_val = float(str(thanh_tien))
+            sl_val = float(str(so_luong_clip))
+            if sl_val > 0:
+                chi_phi = str(int(tt_val / sl_val))
+                print(f"💰 Auto-calculated chi_phi: {thanh_tien} / {so_luong_clip} = {chi_phi}")
+        except (ValueError, ZeroDivisionError):
+            pass
+    
     # Row 1: Chi phí một clip → Số lượng, Đơn giá(Chi phí), Tổng cộng(Thành tiền)
     if so_luong_clip:
         _set_cell_text(table_pay.rows[1].cells[2], str(int(float(str(so_luong_clip)))), bold=True, font_size=13)
