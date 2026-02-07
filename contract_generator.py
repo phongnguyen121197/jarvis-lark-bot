@@ -1,24 +1,42 @@
 """
 Contract Generator - Fill Word template with KOC data from Lark Base
-Version 1.1.0
+Version 2.0.0
 
-Fills Table 1 (Bên B info) in the contract template:
-  Row 0: Tên Bên B
-  Row 1: Địa chỉ
-  Row 2: MST
-  Row 3: SĐT
-  Row 4: Gmail
-  Row 5: CCCD + ngày cấp + nơi cấp
-  Row 6: STK
+PLACEHOLDER-BASED: Templates use {PLACEHOLDER} markers that get replaced with data.
+Works with ANY template structure - no hardcoded paragraph/run indices.
 
-v1.1: Thêm _normalize_formatting() - chuẩn hóa lề, spacing, indent.
+Supported placeholders:
+  {HO_TEN}              - Họ và Tên Bên B
+  {DIA_CHI}             - Địa chỉ Bên B
+  {MST}                 - Mã số thuế Bên B
+  {SDT}                 - Số điện thoại Bên B
+  {GMAIL}               - Gmail Bên B
+  {CCCD}                - Số CCCD Bên B
+  {CCCD_NGAY_CAP}       - Ngày cấp CCCD
+  {CCCD_NOI_CAP}        - Nơi cấp CCCD
+  {STK}                 - Số tài khoản Bên B
+  {ID_KOC}              - ID KOC (tên kênh)
+  {THUONG_HIEU}         - Thương hiệu
+  {NGAY_DU_KIEN_AIR}    - Ngày dự kiến air
+  {HOA_HONG_TU_NHIEN}   - % Hoa hồng tự nhiên (đã x100)
+  {HOA_HONG_CHAY_ADS}   - % Hoa hồng chạy ads (đã x100)
+  {SO_LUONG_CLIP}       - Số lượng clip
+  {CHI_PHI}             - Chi phí 1 clip (formatted: 300.000)
+  {THANH_TIEN}          - Thành tiền (formatted: 300.000)
+  {THUE_TNCN}           - Thuế TNCN (formatted: 30.000)
+  {TONG_SAU_THUE}       - Tổng giá trị sau thuế (formatted: 270.000)
+  {BANG_CHU}            - Bằng chữ (Hai trăm bảy mươi nghìn đồng.)
+  {NGAY_HOP_DONG}       - ngày DD tháng MM năm YYYY
+
+CCCD images: Insert at paragraphs containing "Mặt trước CCCD" / "Mặt sau CCCD".
 """
 
 import os
+import re
 import copy
 import tempfile
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from docx import Document
 from docx.shared import Pt, Cm, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -33,7 +51,6 @@ TEMPLATE_HDKOC = os.path.join(TEMPLATE_DIR, "Mau_hop_dong_KOC.docx")
 # Template name mapping: Lark "Template" field value → Drive search name
 TEMPLATE_MAP = {
     "HDKOC": "HDKOC",
-    # Add more: "HDDV": "HDDV", "HDHTM": "HDHTM"
 }
 
 
@@ -41,26 +58,135 @@ TEMPLATE_MAP = {
 # ║              FORMAT CHUẨN HỢP ĐỒNG VIỆT NAM                   ║
 # ╚════════════════════════════════════════════════════════════════╝
 
-# Lề trang chuẩn hợp đồng VN (Nghị định 30/2020/NĐ-CP)
-MARGIN_TOP = Cm(2)        # Lề trên: 2cm
-MARGIN_BOTTOM = Cm(2)     # Lề dưới: 2cm
-MARGIN_LEFT = Cm(2.5)     # Lề trái: 2.5cm (đóng gáy)
-MARGIN_RIGHT = Cm(1.5)    # Lề phải: 1.5cm
+MARGIN_TOP = Cm(2)
+MARGIN_BOTTOM = Cm(2)
+MARGIN_LEFT = Cm(2.5)
+MARGIN_RIGHT = Cm(1.5)
 
-# Spacing chuẩn
-LINE_SPACING = 1.15                 # Khoảng cách dòng
-SPACE_AFTER_NORMAL = Pt(3)          # Sau đoạn thường: 3pt
-SPACE_AFTER_HEADING = Pt(6)         # Sau tiêu đề điều: 6pt
-SPACE_AFTER_MAX = Pt(8)             # Tối đa cho phép: 8pt
-SPACE_BEFORE_HEADING = Pt(6)        # Trước tiêu đề điều: 6pt
-
-# Thresholds để phát hiện
-BIG_SPACE_THRESHOLD = Pt(10)        # > 10pt coi là quá lớn
+LINE_SPACING = 1.15
+SPACE_AFTER_NORMAL = Pt(3)
+SPACE_AFTER_HEADING = Pt(6)
+SPACE_AFTER_MAX = Pt(8)
+SPACE_BEFORE_HEADING = Pt(6)
+BIG_SPACE_THRESHOLD = Pt(10)
 HEADING_KEYWORDS = ["ĐIỀU", "CỘNG HOÀ", "HỢP ĐỒNG", "ĐẠI DIỆN"]
 
 
+# ╔════════════════════════════════════════════════════════════════╗
+# ║              PLACEHOLDER FIND & REPLACE ENGINE                  ║
+# ╚════════════════════════════════════════════════════════════════╝
+
+def _replace_in_paragraph(paragraph, placeholder: str, replacement: str) -> bool:
+    """
+    Replace {PLACEHOLDER} in a paragraph, handling cross-run cases.
+    
+    Word often splits text across multiple runs (e.g. different formatting),
+    so {THUONG_HIEU} might be split as "{THUONG" in run[0] and "_HIEU}" in run[1].
+    This function handles all cases.
+    
+    Returns True if replacement was made.
+    """
+    runs = paragraph.runs
+    if not runs:
+        return False
+    
+    full_text = ''.join(run.text for run in runs)
+    if placeholder not in full_text:
+        return False
+    
+    # Simple case: placeholder is entirely within a single run
+    for run in runs:
+        if placeholder in run.text:
+            run.text = run.text.replace(placeholder, replacement)
+            return True
+    
+    # Complex case: placeholder spans multiple runs
+    start_pos = full_text.index(placeholder)
+    end_pos = start_pos + len(placeholder)
+    
+    char_count = 0
+    found_start = False
+    
+    for run in runs:
+        run_start = char_count
+        run_end = char_count + len(run.text)
+        
+        if not found_start and run_start <= start_pos < run_end:
+            found_start = True
+            before = run.text[:start_pos - run_start]
+            
+            if run_end >= end_pos:
+                after = run.text[end_pos - run_start:]
+                run.text = before + replacement + after
+                return True
+            else:
+                run.text = before + replacement
+                
+        elif found_start and run_end <= end_pos:
+            run.text = ''
+            
+        elif found_start and run_start < end_pos <= run_end:
+            after = run.text[end_pos - run_start:]
+            run.text = after
+            return True
+        
+        char_count = run_end
+    
+    return True
+
+
+def _replace_all(doc: Document, replacements: Dict[str, str]) -> Dict[str, int]:
+    """
+    Replace all placeholders throughout the entire document.
+    Searches: paragraphs, table cells, headers, footers.
+    
+    Returns dict of placeholder → count of replacements made.
+    """
+    counts = {k: 0 for k in replacements}
+    
+    for placeholder, replacement in replacements.items():
+        if not replacement and replacement != "":
+            replacement = ""
+        replacement = str(replacement)
+        
+        # Search in paragraphs
+        for para in doc.paragraphs:
+            while placeholder in ''.join(r.text for r in para.runs):
+                if _replace_in_paragraph(para, placeholder, replacement):
+                    counts[placeholder] += 1
+                else:
+                    break
+        
+        # Search in table cells
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        while placeholder in ''.join(r.text for r in para.runs):
+                            if _replace_in_paragraph(para, placeholder, replacement):
+                                counts[placeholder] += 1
+                            else:
+                                break
+        
+        # Search in headers/footers
+        for section in doc.sections:
+            for hf in [section.header, section.footer]:
+                if hf and hf.paragraphs:
+                    for para in hf.paragraphs:
+                        while placeholder in ''.join(r.text for r in para.runs):
+                            if _replace_in_paragraph(para, placeholder, replacement):
+                                counts[placeholder] += 1
+                            else:
+                                break
+    
+    return counts
+
+
+# ╔════════════════════════════════════════════════════════════════╗
+# ║                    FORMAT HELPERS                               ║
+# ╚════════════════════════════════════════════════════════════════╝
+
 def _is_heading_paragraph(text: str) -> bool:
-    """Kiểm tra paragraph có phải tiêu đề/heading không."""
     stripped = text.strip()
     if not stripped:
         return False
@@ -71,49 +197,41 @@ def _is_heading_paragraph(text: str) -> bool:
 
 
 def _normalize_formatting(doc: Document):
-    """
-    Chuẩn hóa formatting toàn bộ document theo tiêu chuẩn hợp đồng VN.
+    """Chuẩn hóa formatting toàn bộ document theo tiêu chuẩn hợp đồng VN."""
     
-    Fixes:
-    1. Lề trang → chuẩn VN (2.5 / 1.5 / 2 / 2 cm)
-    2. space_after quá lớn → cap lại 3-6pt
-    3. Indent âm → 0
-    4. Line spacing → 1.15
-    5. Ngày tháng → căn phải, bỏ tab thừa
-    """
-    
-    # === 1. Chuẩn hóa lề trang ===
     for section in doc.sections:
         section.top_margin = MARGIN_TOP
         section.bottom_margin = MARGIN_BOTTOM
         section.left_margin = MARGIN_LEFT
         section.right_margin = MARGIN_RIGHT
     
-    # === 2. Chuẩn hóa paragraphs ===
     for i, para in enumerate(doc.paragraphs):
         pf = para.paragraph_format
         text = para.text.strip()
         
-        # --- Fix indent âm ---
-        if pf.first_line_indent is not None and pf.first_line_indent < 0:
-            pf.first_line_indent = 0
+        try:
+            if pf.first_line_indent is not None and pf.first_line_indent < 0:
+                pf.first_line_indent = 0
+        except (ValueError, TypeError):
+            pass
         
-        # --- Fix space_after quá lớn ---
-        if pf.space_after is not None and pf.space_after > BIG_SPACE_THRESHOLD:
-            if _is_heading_paragraph(text):
-                pf.space_after = SPACE_AFTER_HEADING
-            else:
-                pf.space_after = SPACE_AFTER_NORMAL
+        try:
+            if pf.space_after is not None and pf.space_after > BIG_SPACE_THRESHOLD:
+                if _is_heading_paragraph(text):
+                    pf.space_after = SPACE_AFTER_HEADING
+                else:
+                    pf.space_after = SPACE_AFTER_NORMAL
+        except (ValueError, TypeError):
+            pass
         
-        # --- Chuẩn hóa line spacing ---
-        # Chỉ fix nếu gần 1.15 (template dùng 1.07-1.15)
-        if pf.line_spacing is not None and isinstance(pf.line_spacing, float):
-            if 1.0 <= pf.line_spacing <= 1.2:
-                pf.line_spacing = LINE_SPACING
+        try:
+            if pf.line_spacing is not None and isinstance(pf.line_spacing, float):
+                if 1.0 <= pf.line_spacing <= 1.2:
+                    pf.line_spacing = LINE_SPACING
+        except (ValueError, TypeError):
+            pass
         
-        # --- Fix dòng ngày tháng: bỏ tab, căn phải ---
         if "Hà Nội, ngày" in text:
-            # Xóa tab thừa, giữ text gọn
             clean_date = text.replace("\t", "").strip()
             if para.runs:
                 for run in para.runs:
@@ -123,78 +241,41 @@ def _normalize_formatting(doc: Document):
             pf.first_line_indent = 0
             pf.space_after = SPACE_AFTER_HEADING
         
-        # --- Fix dòng "(Về việc...)" ---
         if text.startswith("(Về việc"):
             pf.space_after = SPACE_AFTER_HEADING
         
-        # --- Fix tiêu đề ĐIỀU: thêm space_before ---
         if text.startswith("ĐIỀU"):
             pf.space_before = SPACE_BEFORE_HEADING
             pf.space_after = SPACE_AFTER_HEADING
     
-    # === 3. Chuẩn hóa bảng (table cells) ===
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs:
                     pf = para.paragraph_format
-                    # Fix indent âm trong bảng
-                    if pf.first_line_indent is not None and pf.first_line_indent < 0:
-                        pf.first_line_indent = 0
-                    # Fix space_after trong bảng
-                    if pf.space_after is not None and pf.space_after > BIG_SPACE_THRESHOLD:
-                        pf.space_after = Pt(2)
-                    # Chuẩn hóa line spacing trong bảng
-                    if pf.line_spacing is not None and isinstance(pf.line_spacing, float):
-                        if 1.0 <= pf.line_spacing <= 1.2:
-                            pf.line_spacing = LINE_SPACING
-
-
-def _set_cell_text(cell, text: str, bold: bool = False, font_size: float = None):
-    """Set text in a table cell, preserving basic formatting."""
-    # Clear existing paragraphs
-    for para in cell.paragraphs:
-        for run in para.runs:
-            run.text = ""
-    
-    # Set text in first paragraph's first run, or create new run
-    if cell.paragraphs and cell.paragraphs[0].runs:
-        run = cell.paragraphs[0].runs[0]
-        run.text = text
-        run.bold = bold
-        if font_size:
-            run.font.size = Pt(font_size)
-    else:
-        run = cell.paragraphs[0].add_run(text)
-        run.bold = bold
-        if font_size:
-            run.font.size = Pt(font_size)
-
-
-def _safe_set_cell(table, row_idx: int, cell_idx: int, text: str, bold: bool = False, font_size: float = None) -> bool:
-    """Safely set cell text with bounds checking. Returns True if successful."""
-    try:
-        rows = list(table.rows)
-        if row_idx >= len(rows):
-            return False
-        cells = list(rows[row_idx].cells)
-        if cell_idx >= len(cells):
-            return False
-        _set_cell_text(cells[cell_idx], text, bold=bold, font_size=font_size)
-        return True
-    except (IndexError, AttributeError):
-        return False
+                    try:
+                        if pf.first_line_indent is not None and pf.first_line_indent < 0:
+                            pf.first_line_indent = 0
+                    except (ValueError, TypeError):
+                        pass
+                    try:
+                        if pf.space_after is not None and pf.space_after > BIG_SPACE_THRESHOLD:
+                            pf.space_after = Pt(2)
+                    except (ValueError, TypeError):
+                        pass
+                    try:
+                        if pf.line_spacing is not None and isinstance(pf.line_spacing, float):
+                            if 1.0 <= pf.line_spacing <= 1.2:
+                                pf.line_spacing = LINE_SPACING
+                    except (ValueError, TypeError):
+                        pass
 
 
 def _format_currency_vn(amount) -> str:
-    """
-    Format number as Vietnamese currency: 11700000 → '11.700.000'
-    Handles: int, float, string with commas/dots.
-    """
+    """Format number as Vietnamese currency: 11700000 → '11.700.000'"""
     if not amount and amount != 0:
         return ""
     try:
-        # Clean string input
         s = str(amount).replace(",", "").replace(".", "").strip()
         num = int(float(s)) if s else 0
         if num == 0:
@@ -205,100 +286,69 @@ def _format_currency_vn(amount) -> str:
 
 
 def _format_date_field(value) -> str:
-    """
-    Convert Lark date field to dd/mm/yyyy string.
-    Handles: timestamp in ms (e.g. 1738886400000), date string, or dd/mm/yyyy.
-    """
+    """Convert Lark date field to dd/mm/yyyy string."""
     if not value:
         return ""
     s = str(value).strip()
-    
-    # Already in dd/mm/yyyy format
     if "/" in s and len(s) <= 10:
         return s
-    
-    # Timestamp in milliseconds
     try:
         ts = float(s)
-        if ts > 1e12:  # ms
+        if ts > 1e12:
             ts = ts / 1000
-        from datetime import datetime as _dt
-        dt = _dt.fromtimestamp(ts)
+        dt = datetime.fromtimestamp(ts)
         return dt.strftime("%d/%m/%Y")
     except (ValueError, TypeError, OSError):
         pass
-    
     return s
 
 
 def _format_percent(value) -> str:
-    """
-    Convert percentage value to display string.
-    Handles: 0.05 → '5', '5%' → '5', '5' → '5', 0.1 → '10'
-    """
+    """Convert percentage: 0.05 → '5', '5%' → '5', 0.1 → '10'"""
     if not value and value != 0:
         return ""
     s = str(value).replace("%", "").strip()
     try:
         num = float(s)
-        # If value < 1, it's decimal format (0.05 = 5%)
         if num < 1:
             num = num * 100
-        # Remove trailing .0
-        result = f"{num:g}"
-        return result
+        return f"{num:g}"
     except (ValueError, TypeError):
         return s
 
 
-def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
-    """
-    Insert CCCD image after the title paragraph (e.g. 'Mặt trước CCCD').
-    Converts image to JPEG via Pillow first to handle formats docx can't read.
-    """
-    try:
-        from docx.shared import Cm
-        from PIL import Image as PILImage
-        import io, traceback
-        
-        # Convert image to JPEG bytes via Pillow (handles HEIC, WebP, corrupted headers)
-        img = PILImage.open(image_path)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=90)
-        buf.seek(0)
-        
-        print(f"📐 CCCD image {image_path}: {img.size[0]}x{img.size[1]}, converted to JPEG ({buf.getbuffer().nbytes} bytes)")
-        
-        # Find first empty paragraph after the title to insert image
-        target_para = None
-        for idx in range(para_index + 1, min(para_index + 4, len(doc.paragraphs))):
-            p = doc.paragraphs[idx]
-            if not p.text.strip():
-                target_para = p
-                break
-        
-        if target_para is None:
-            target_para = doc.paragraphs[para_index]
-        
-        # Clear paragraph and add image
-        for run in target_para.runs:
-            run.text = ""
-        
-        run = target_para.add_run()
-        run.add_picture(buf, width=Cm(14))
-        print(f"✅ Inserted CCCD image at para {para_index}")
-    except Exception as e:
-        print(f"⚠️ Failed to insert CCCD image at para {para_index}: {type(e).__name__}: {e}")
-        traceback.print_exc()
+def _format_date_vn(date_value) -> str:
+    """Convert date value to Vietnamese format dd/MM/yyyy."""
+    if not date_value:
+        return ""
+    if isinstance(date_value, (int, float)):
+        dt = datetime.fromtimestamp(date_value / 1000)
+        return dt.strftime("%d/%m/%Y")
+    if isinstance(date_value, datetime):
+        return date_value.strftime("%d/%m/%Y")
+    if isinstance(date_value, str):
+        if len(date_value) == 10 and date_value[2] == "/" and date_value[5] == "/":
+            return date_value
+        try:
+            dt = datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+            return dt.strftime("%d/%m/%Y")
+        except ValueError:
+            pass
+        try:
+            dt = datetime.strptime(date_value, "%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
+        except ValueError:
+            pass
+    return str(date_value)
+
+
+def _get_current_date_vn() -> str:
+    now = datetime.now()
+    return f"ngày {now.day:02d} tháng {now.month:02d} năm {now.year}"
 
 
 def _number_to_vietnamese_words(number) -> str:
-    """
-    Chuyển số thành chữ tiếng Việt.
-    Ví dụ: 10530000 → 'Mười triệu năm trăm ba mươi nghìn đồng'
-    """
+    """Chuyển số thành chữ tiếng Việt."""
     try:
         n = int(float(str(number).replace(",", "").replace(".", "").strip()))
     except (ValueError, TypeError):
@@ -310,21 +360,16 @@ def _number_to_vietnamese_words(number) -> str:
     ones = ["", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
     
     def _read_group_3(num):
-        """Đọc nhóm 3 chữ số."""
         if num == 0:
             return ""
-        
         h = num // 100
         t = (num % 100) // 10
         u = num % 10
-        
         parts = []
-        
         if h > 0:
             parts.append(f"{ones[h]} trăm")
             if t == 0 and u > 0:
                 parts.append("lẻ")
-        
         if t > 1:
             parts.append(f"{ones[t]} mươi")
             if u == 1:
@@ -345,11 +390,9 @@ def _number_to_vietnamese_words(number) -> str:
             parts.append(ones[u])
         elif t == 0 and h == 0 and u > 0:
             parts.append(ones[u])
-        
         return " ".join(parts)
     
     units = ["", "nghìn", "triệu", "tỷ"]
-    
     groups = []
     temp = n
     while temp > 0:
@@ -365,83 +408,75 @@ def _number_to_vietnamese_words(number) -> str:
                     result_parts.append(f"{text} {units[i]}".strip())
                 else:
                     result_parts.append(text)
-        elif i > 0 and any(groups[j] > 0 for j in range(i)):
-            # Nhóm = 0 nhưng còn nhóm sau có giá trị → thêm "không trăm"
-            pass
     
     result = " ".join(result_parts).strip()
-    # Capitalize first letter
     result = result[0].upper() + result[1:] if result else ""
     return f"{result} đồng."
 
 
-def _format_date_vn(date_value) -> str:
-    """
-    Convert date value to Vietnamese format dd/MM/yyyy.
-    Handles: timestamp (ms), ISO string, dd/MM/yyyy string, datetime object.
-    """
-    if not date_value:
-        return ""
-    
-    # Lark Date field returns timestamp in milliseconds
-    if isinstance(date_value, (int, float)):
-        dt = datetime.fromtimestamp(date_value / 1000)
-        return dt.strftime("%d/%m/%Y")
-    
-    if isinstance(date_value, datetime):
-        return date_value.strftime("%d/%m/%Y")
-    
-    if isinstance(date_value, str):
-        # Already in dd/MM/yyyy format
-        if len(date_value) == 10 and date_value[2] == "/" and date_value[5] == "/":
-            return date_value
-        # ISO format
-        try:
-            dt = datetime.fromisoformat(date_value.replace("Z", "+00:00"))
-            return dt.strftime("%d/%m/%Y")
-        except ValueError:
-            pass
-        # Try yyyy-MM-dd
-        try:
-            dt = datetime.strptime(date_value, "%Y-%m-%d")
-            return dt.strftime("%d/%m/%Y")
-        except ValueError:
-            pass
-    
-    return str(date_value)
+# ╔════════════════════════════════════════════════════════════════╗
+# ║                    CCCD IMAGE INSERTION                         ║
+# ╚════════════════════════════════════════════════════════════════╝
+
+def _insert_cccd_image(doc: Document, keyword: str, image_path: str):
+    """Insert CCCD image after the paragraph containing the keyword."""
+    try:
+        from docx.shared import Cm
+        from PIL import Image as PILImage
+        import io, traceback
+        
+        target_idx = None
+        for i, para in enumerate(doc.paragraphs):
+            if keyword in para.text:
+                target_idx = i
+                break
+        
+        if target_idx is None:
+            print(f"⚠️ CCCD keyword '{keyword}' not found in document")
+            return
+        
+        img = PILImage.open(image_path)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        
+        print(f"📐 CCCD image {image_path}: {img.size[0]}x{img.size[1]}, converted to JPEG ({buf.getbuffer().nbytes} bytes)")
+        
+        target_para = None
+        for idx in range(target_idx + 1, min(target_idx + 4, len(doc.paragraphs))):
+            p = doc.paragraphs[idx]
+            if not p.text.strip():
+                target_para = p
+                break
+        
+        if target_para is None:
+            target_para = doc.paragraphs[target_idx]
+        
+        for run in target_para.runs:
+            run.text = ""
+        
+        run = target_para.add_run()
+        run.add_picture(buf, width=Cm(14))
+        print(f"✅ Inserted CCCD image at '{keyword}'")
+    except Exception as e:
+        print(f"⚠️ Failed to insert CCCD image '{keyword}': {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
-def _get_current_date_vn() -> str:
-    """Get current date in Vietnamese format: 'ngày DD tháng MM năm YYYY'"""
-    now = datetime.now()
-    return f"ngày {now.day:02d} tháng {now.month:02d} năm {now.year}"
-
+# ╔════════════════════════════════════════════════════════════════╗
+# ║                    MAIN GENERATE FUNCTION                       ║
+# ╚════════════════════════════════════════════════════════════════╝
 
 def generate_contract(data: Dict, template_path: str = None, output_path: str = None) -> str:
     """
-    Generate a KOC contract by filling the Word template.
-    
-    Args:
-        data: Dictionary with contract fields from Lark Base:
-            - ho_ten: Họ và Tên Bên B
-            - dia_chi: Địa chỉ Bên B
-            - mst: MST Bên B
-            - sdt: SDT Bên B
-            - cccd: CCCD Bên B
-            - cccd_ngay_cap: CCCD Ngày Cấp (timestamp ms or date string)
-            - cccd_noi_cap: CCCD Nơi Cấp
-            - gmail: Gmail Bên B
-            - stk: STK bên B
-            - id_koc: ID KOC (for filename)
-        template_path: Path to Word template (default: templates/Mau_hop_dong_KOC.docx)
-        output_path: Path for output file (default: temp file)
-    
-    Returns:
-        Path to generated .docx file
+    Generate a KOC contract by replacing placeholders in Word template.
+    Works with ANY template structure - no hardcoded indices.
     """
     template = template_path
     if not template:
-        # Try to get template from Drive (with cache)
         template_key = data.get("template", "HDKOC")
         drive_name = TEMPLATE_MAP.get(template_key, template_key)
         try:
@@ -456,200 +491,124 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     
     doc = Document(template)
     
-    # Extract common fields early (used in multiple sections)
+    # Extract fields
     ho_ten = data.get("ho_ten", "")
     id_koc = data.get("id_koc", "")
+    dia_chi = data.get("dia_chi", "")
+    mst = data.get("mst", "")
+    sdt = data.get("sdt", "")
+    gmail = data.get("gmail", "")
+    cccd = data.get("cccd", "")
+    cccd_ngay_cap = _format_date_vn(data.get("cccd_ngay_cap", ""))
+    cccd_noi_cap = data.get("cccd_noi_cap", "")
+    stk = data.get("stk", "")
     
-    # Log template structure for debugging
+    thuong_hieu = data.get("thuong_hieu", "")
+    ngay_du_kien_air = _format_date_field(data.get("ngay_du_kien_air", ""))
+    hoa_hong_tu_nhien = _format_percent(data.get("hoa_hong_tu_nhien", ""))
+    hoa_hong_chay_ads = _format_percent(data.get("hoa_hong_chay_ads", ""))
+    
+    thanh_tien = data.get("thanh_tien", "")
+    chi_phi = data.get("chi_phi", "")
+    so_luong_clip = data.get("so_luong_clip", "")
+    thue_tncn = data.get("thue_tncn", "")
+    tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
+    
+    # Calculate chi_phi if not provided
+    if not chi_phi and thanh_tien and so_luong_clip:
+        try:
+            chi_phi = str(int(float(str(thanh_tien)) / float(str(so_luong_clip))))
+            print(f"💰 Chi phí calculated: {thanh_tien} / {so_luong_clip} = {chi_phi}")
+        except (ValueError, ZeroDivisionError):
+            pass
+    
+    # Format so_luong_clip as integer
+    if so_luong_clip:
+        try:
+            so_luong_clip = str(int(float(str(so_luong_clip))))
+        except (ValueError, TypeError):
+            pass
+    
+    # Calculate bằng chữ
+    bang_chu = ""
+    if tong_gia_tri_sau_thue:
+        bang_chu = _number_to_vietnamese_words(tong_gia_tri_sau_thue)
+    
     print(f"📋 Template structure: {len(doc.tables)} tables, {len(doc.paragraphs)} paragraphs")
     
-    # === 1. Update contract date (Paragraph 3) ===
-    if len(doc.paragraphs) > 3:
-        date_para = doc.paragraphs[3]
-        date_text = f"\t\t\t\t\t\t\t Hà Nội, {_get_current_date_vn()}"
-        if date_para.runs:
-            for run in date_para.runs:
-                run.text = ""
-            date_para.runs[0].text = date_text
-        else:
-            date_para.text = date_text
+    # ═══════════════════════════════════════════════════════
+    # BUILD REPLACEMENT MAP
+    # ═══════════════════════════════════════════════════════
+    replacements = {
+        "{HO_TEN}": str(ho_ten),
+        "{DIA_CHI}": str(dia_chi),
+        "{MST}": str(mst),
+        "{SDT}": str(sdt),
+        "{GMAIL}": str(gmail),
+        "{CCCD}": str(cccd),
+        "{CCCD_NGAY_CAP}": str(cccd_ngay_cap),
+        "{CCCD_NOI_CAP}": str(cccd_noi_cap),
+        "{STK}": str(stk),
+        "{ID_KOC}": str(id_koc),
+        "{THUONG_HIEU}": str(thuong_hieu),
+        "{NGAY_DU_KIEN_AIR}": str(ngay_du_kien_air),
+        "{HOA_HONG_TU_NHIEN}": str(hoa_hong_tu_nhien),
+        "{HOA_HONG_CHAY_ADS}": str(hoa_hong_chay_ads),
+        "{SO_LUONG_CLIP}": str(so_luong_clip),
+        "{CHI_PHI}": _format_currency_vn(chi_phi),
+        "{THANH_TIEN}": _format_currency_vn(thanh_tien),
+        "{THUE_TNCN}": _format_currency_vn(thue_tncn),
+        "{TONG_SAU_THUE}": _format_currency_vn(tong_gia_tri_sau_thue),
+        "{BANG_CHU}": str(bang_chu),
+        "{NGAY_HOP_DONG}": _get_current_date_vn(),
+    }
     
-    # === 2. Fill Table 1 - Bên B Information ===
-    if len(doc.tables) < 2:
-        print(f"⚠️ Template has only {len(doc.tables)} tables, skipping Table 1 (Bên B)")
-    else:
-        table_b = doc.tables[1]
-        
-        dia_chi = data.get("dia_chi", "")
-        mst = data.get("mst", "")
-        sdt = data.get("sdt", "")
-        gmail = data.get("gmail", "")
-        cccd = data.get("cccd", "")
-        cccd_ngay_cap = _format_date_vn(data.get("cccd_ngay_cap", ""))
-        cccd_noi_cap = data.get("cccd_noi_cap", "")
-        stk = data.get("stk", "")
-        
-        # Row 0: BÊN B: [Tên]
-        _safe_set_cell(table_b, 0, 0, f"BÊN B: {ho_ten}", bold=True)
-        
-        # Row 1: Địa chỉ
-        if dia_chi:
-            _safe_set_cell(table_b, 1, 1, dia_chi)
-        
-        # Row 2: MST
-        if mst:
-            _safe_set_cell(table_b, 2, 1, mst)
-        
-        # Row 3: SĐT
-        if sdt:
-            _safe_set_cell(table_b, 3, 1, str(sdt))
-        
-        # Row 4: Gmail
-        if gmail:
-            _safe_set_cell(table_b, 4, 1, gmail)
-        
-        # Row 5: CCCD + cấp ngày
-        if cccd:
-            _safe_set_cell(table_b, 5, 0, f"CCCD: {cccd}", bold=True)
-        cccd_detail = f"cấp ngày {cccd_ngay_cap} tại {cccd_noi_cap}"
-        _safe_set_cell(table_b, 5, 1, cccd_detail)
-        
-        # Row 6: STK
-        if stk:
-            _safe_set_cell(table_b, 6, 1, str(stk))
+    # ═══════════════════════════════════════════════════════
+    # REPLACE ALL PLACEHOLDERS
+    # ═══════════════════════════════════════════════════════
+    counts = _replace_all(doc, replacements)
     
-    # === 3. Fill Paragraph-level data (Điều 2, 3) ===
-    # Note: paragraph indices are template-specific, wrap in try-except
-    thuong_hieu = data.get("thuong_hieu", "")
-    ngay_du_kien_air = data.get("ngay_du_kien_air", "")
-    hoa_hong_tu_nhien = data.get("hoa_hong_tu_nhien", "")
-    hoa_hong_chay_ads = data.get("hoa_hong_chay_ads", "")
-    num_paras = len(doc.paragraphs)
+    found = {k: v for k, v in counts.items() if v > 0}
+    not_found = [k for k, v in counts.items() if v == 0 and replacements[k]]
+    print(f"✅ Replaced {sum(counts.values())} placeholders: {found}")
+    if not_found:
+        print(f"⚠️ Placeholders not found in template: {not_found}")
     
-    try:
-        # Para 24: "Kallé Feum" → Thương hiệu
-        if thuong_hieu and num_paras > 24:
-            p24 = doc.paragraphs[24]
-            if len(p24.runs) > 18:
-                p24.runs[16].text = str(thuong_hieu)
-                p24.runs[17].text = ""
-                p24.runs[18].text = ""
-        
-        # Para 25: "08/02/2026" → Ngày dự kiến air, "charminglae" → ID KOC
-        if (ngay_du_kien_air or id_koc) and num_paras > 25:
-            p25 = doc.paragraphs[25]
-            if len(p25.runs) > 30:
-                if ngay_du_kien_air:
-                    date_str = _format_date_field(ngay_du_kien_air)
-                    p25.runs[12].text = date_str
-                if id_koc and id_koc != "N/A":
-                    p25.runs[30].text = str(id_koc)
-        
-        # Para 29: Commission "5% tự nhiên + 5% chạy ads"
-        if (hoa_hong_tu_nhien or hoa_hong_chay_ads) and num_paras > 29:
-            p29 = doc.paragraphs[29]
-            if len(p29.runs) > 7:
-                if hoa_hong_tu_nhien:
-                    val = _format_percent(hoa_hong_tu_nhien)
-                    p29.runs[3].text = f"{val}% "
-                if hoa_hong_chay_ads:
-                    val = _format_percent(hoa_hong_chay_ads)
-                    p29.runs[7].text = f" {val}% "
-        
-        # Para 36: "charminglae" in payment section → ID KOC
-        if id_koc and id_koc != "N/A" and num_paras > 36:
-            p36 = doc.paragraphs[36]
-            if len(p36.runs) > 15:
-                p36.runs[15].text = str(id_koc)
-    except (IndexError, AttributeError) as e:
-        print(f"⚠️ Paragraph fill skipped (template structure differs): {e}")
-    
-    # === 4. Insert CCCD images ===
+    # ═══════════════════════════════════════════════════════
+    # INSERT CCCD IMAGES (by keyword search, not index)
+    # ═══════════════════════════════════════════════════════
     cccd_truoc_path = data.get("cccd_truoc_path", "")
     cccd_sau_path = data.get("cccd_sau_path", "")
     
     if cccd_truoc_path and os.path.exists(cccd_truoc_path):
         fsize = os.path.getsize(cccd_truoc_path)
-        if fsize > 100 and num_paras > 112:
-            _insert_cccd_image(doc, 112, cccd_truoc_path)
-        elif fsize <= 100:
-            print(f"⚠️ CCCD front file too small: {fsize} bytes")
+        if fsize > 100:
+            _insert_cccd_image(doc, "Mặt trước CCCD", cccd_truoc_path)
         else:
-            print(f"⚠️ Template has {num_paras} paragraphs, skipping CCCD front (needs para 112)")
+            print(f"⚠️ CCCD front file too small: {fsize} bytes")
     
     if cccd_sau_path and os.path.exists(cccd_sau_path):
         fsize = os.path.getsize(cccd_sau_path)
-        if fsize > 100 and num_paras > 117:
-            _insert_cccd_image(doc, 117, cccd_sau_path)
-        elif fsize <= 100:
-            print(f"⚠️ CCCD back file too small: {fsize} bytes")
+        if fsize > 100:
+            _insert_cccd_image(doc, "Mặt sau CCCD", cccd_sau_path)
         else:
-            print(f"⚠️ Template has {num_paras} paragraphs, skipping CCCD back (needs para 117)")
+            print(f"⚠️ CCCD back file too small: {fsize} bytes")
     
-    # === 5. Fill Table 2 - Payment Details (Phí dịch vụ) ===
-    if len(doc.tables) < 3:
-        print(f"⚠️ Template has only {len(doc.tables)} tables, skipping Table 2 (Payment)")
-    else:
-        table_pay = doc.tables[2]
-        
-        thanh_tien = data.get("thanh_tien", "")
-        chi_phi = data.get("chi_phi", "")
-        so_luong_clip = data.get("so_luong_clip", "")
-        thue_tncn = data.get("thue_tncn", "")
-        tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
-        
-        # Fallback: calculate chi_phi from thanh_tien / so_luong_clip
-        if not chi_phi and thanh_tien and so_luong_clip:
-            try:
-                chi_phi = str(int(float(str(thanh_tien)) / float(str(so_luong_clip))))
-                print(f"💰 Chi phí calculated: {thanh_tien} / {so_luong_clip} = {chi_phi}")
-            except (ValueError, ZeroDivisionError):
-                pass
-        
-        # Row 1: Chi phí một clip → Số lượng, Đơn giá(Chi phí), Tổng cộng(Thành tiền)
-        if so_luong_clip:
-            _safe_set_cell(table_pay, 1, 2, str(int(float(str(so_luong_clip)))), bold=True, font_size=13)
-        if chi_phi:
-            formatted_cp = _format_currency_vn(chi_phi)
-            _safe_set_cell(table_pay, 1, 3, formatted_cp, bold=True, font_size=13)
-        if thanh_tien:
-            formatted_tt = _format_currency_vn(thanh_tien)
-            _safe_set_cell(table_pay, 1, 4, formatted_tt, bold=True, font_size=13)
-        
-        # Row 2: TNCN (10%) → Đơn giá, Tổng cộng
-        if thue_tncn:
-            formatted_tncn = _format_currency_vn(thue_tncn)
-            _safe_set_cell(table_pay, 2, 3, formatted_tncn, bold=True, font_size=13)
-            _safe_set_cell(table_pay, 2, 4, formatted_tncn, bold=True, font_size=13)
-        
-        # Row 3: Tổng giá trị sau thuế → Tổng cộng
-        if tong_gia_tri_sau_thue:
-            formatted_tgst = _format_currency_vn(tong_gia_tri_sau_thue)
-            _safe_set_cell(table_pay, 3, 4, formatted_tgst, bold=True, font_size=13)
-        
-        # Row 4: Bằng chữ → convert to Vietnamese words
-        if tong_gia_tri_sau_thue:
-            bang_chu = f"Bằng chữ: {_number_to_vietnamese_words(tong_gia_tri_sau_thue)}"
-            try:
-                _safe_set_cell(table_pay, 4, 0, bang_chu, bold=True)
-                if table_pay.rows[4].cells[0].paragraphs[0].runs:
-                    table_pay.rows[4].cells[0].paragraphs[0].runs[0].italic = True
-            except (IndexError, AttributeError):
-                pass
-    
-    # === 3. Chuẩn hóa formatting toàn bộ ===
+    # ═══════════════════════════════════════════════════════
+    # NORMALIZE FORMATTING
+    # ═══════════════════════════════════════════════════════
     _normalize_formatting(doc)
     
-    # === 4. Save output ===
+    # ═══════════════════════════════════════════════════════
+    # SAVE OUTPUT
+    # ═══════════════════════════════════════════════════════
     if output_path:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         doc.save(output_path)
         return output_path
     
-    # Generate temp file with meaningful name
-    id_koc = data.get("id_koc", "unknown")
     safe_name = "".join(c for c in ho_ten if c.isalnum() or c in " _-").strip().replace(" ", "_")
-    filename = f"HD_KOC_{id_koc}_{safe_name}.docx"
+    filename = f"{id_koc}_{datetime.now().strftime('%d-%m-%Y')}.docx"
     
     tmp_dir = tempfile.mkdtemp(prefix="contract_")
     output = os.path.join(tmp_dir, filename)
@@ -660,12 +619,7 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
 
 
 def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
-    """
-    Convert Lark Base record fields to contract_generator data format.
-    
-    Lark Base field names (Vietnamese with spaces) → internal keys.
-    """
-    # Handle phone field - Lark may return as object or string
+    """Convert Lark Base record fields to contract_generator data format."""
     sdt = fields.get("SDT Bên B", "")
     if isinstance(sdt, dict):
         sdt = sdt.get("value", sdt.get("text", ""))
@@ -681,20 +635,20 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "cccd_noi_cap": fields.get("CCCD Nơi Cấp", ""),
         "gmail": fields.get("Gmail Bên B", ""),
         "stk": fields.get("STK bên B", ""),
-        # Payment fields (Table 2)
+        # Payment
         "chi_phi": fields.get("Chi phí", ""),
         "thanh_tien": fields.get("Thành Tiền", fields.get("Thành Tiên", "")),
         "so_luong_clip": fields.get("Số lượng clip", ""),
         "thue_tncn": fields.get("Thuế TNCN", ""),
         "tong_gia_tri_sau_thue": fields.get("Tổng giá trị sau thuế", ""),
-        # Paragraph fields (Điều 2, 3)
+        # Paragraph fields
         "thuong_hieu": fields.get("Thương hiệu", ""),
         "ngay_du_kien_air": fields.get("Ngày dự kiến air", ""),
         "hoa_hong_tu_nhien": fields.get("% Hoa hồng tự nhiên", fields.get("Hoa hồng tự nhiên", "")),
         "hoa_hong_chay_ads": fields.get("% Hoa hồng chạy ads", fields.get("Hoa hồng chạy ads", "")),
-        # CCCD image paths (populated by main.py after downloading from Lark)
+        # CCCD images
         "cccd_truoc_path": fields.get("cccd_truoc_path", ""),
         "cccd_sau_path": fields.get("cccd_sau_path", ""),
-        # Template selection
+        # Template
         "template": fields.get("Template", "HDKOC"),
     }
