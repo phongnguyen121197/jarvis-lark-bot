@@ -171,6 +171,21 @@ def _set_cell_text(cell, text: str, bold: bool = False, font_size: float = None)
             run.font.size = Pt(font_size)
 
 
+def _safe_set_cell(table, row_idx: int, cell_idx: int, text: str, bold: bool = False, font_size: float = None) -> bool:
+    """Safely set cell text with bounds checking. Returns True if successful."""
+    try:
+        rows = list(table.rows)
+        if row_idx >= len(rows):
+            return False
+        cells = list(rows[row_idx].cells)
+        if cell_idx >= len(cells):
+            return False
+        _set_cell_text(cells[cell_idx], text, bold=bold, font_size=font_size)
+        return True
+    except (IndexError, AttributeError):
+        return False
+
+
 def _format_currency_vn(amount) -> str:
     """
     Format number as Vietnamese currency: 11700000 → '11.700.000'
@@ -441,104 +456,113 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     
     doc = Document(template)
     
+    # Extract common fields early (used in multiple sections)
+    ho_ten = data.get("ho_ten", "")
+    id_koc = data.get("id_koc", "")
+    
+    # Log template structure for debugging
+    print(f"📋 Template structure: {len(doc.tables)} tables, {len(doc.paragraphs)} paragraphs")
+    
     # === 1. Update contract date (Paragraph 3) ===
-    date_para = doc.paragraphs[3]
-    date_text = f"\t\t\t\t\t\t\t Hà Nội, {_get_current_date_vn()}"
-    if date_para.runs:
-        # Clear all runs and set new text
-        for run in date_para.runs:
-            run.text = ""
-        date_para.runs[0].text = date_text
-    else:
-        date_para.text = date_text
+    if len(doc.paragraphs) > 3:
+        date_para = doc.paragraphs[3]
+        date_text = f"\t\t\t\t\t\t\t Hà Nội, {_get_current_date_vn()}"
+        if date_para.runs:
+            for run in date_para.runs:
+                run.text = ""
+            date_para.runs[0].text = date_text
+        else:
+            date_para.text = date_text
     
     # === 2. Fill Table 1 - Bên B Information ===
-    table_b = doc.tables[1]
-    
-    ho_ten = data.get("ho_ten", "")
-    dia_chi = data.get("dia_chi", "")
-    mst = data.get("mst", "")
-    sdt = data.get("sdt", "")
-    gmail = data.get("gmail", "")
-    cccd = data.get("cccd", "")
-    id_koc = data.get("id_koc", "")
-    cccd_ngay_cap = _format_date_vn(data.get("cccd_ngay_cap", ""))
-    cccd_noi_cap = data.get("cccd_noi_cap", "")
-    stk = data.get("stk", "")
-    
-    # Row 0: BÊN B: [Tên]
-    # Merged cells - set on first cell, others will follow
-    row0_cell = table_b.rows[0].cells[0]
-    _set_cell_text(row0_cell, f"BÊN B: {ho_ten}", bold=True)
-    
-    # Row 1: Địa chỉ: [value in cell 1]
-    if dia_chi:
-        _set_cell_text(table_b.rows[1].cells[1], dia_chi)
-    
-    # Row 2: MST: [value in cell 1]
-    if mst:
-        _set_cell_text(table_b.rows[2].cells[1], mst)
-    
-    # Row 3: SĐT: [value in cell 1]
-    if sdt:
-        _set_cell_text(table_b.rows[3].cells[1], str(sdt))
-    
-    # Row 4: Gmail: [value in cell 1]
-    if gmail:
-        _set_cell_text(table_b.rows[4].cells[1], gmail)
-    
-    # Row 5: CCCD: [number] | cấp ngày [date] tại [place]
-    if cccd:
-        _set_cell_text(table_b.rows[5].cells[0], f"CCCD: {cccd}", bold=True)
-    
-    cccd_detail = f"cấp ngày {cccd_ngay_cap} tại {cccd_noi_cap}"
-    _set_cell_text(table_b.rows[5].cells[1], cccd_detail)
-    
-    # Row 6: STK: [value in cell 1]
-    if stk:
-        _set_cell_text(table_b.rows[6].cells[1], str(stk))
+    if len(doc.tables) < 2:
+        print(f"⚠️ Template has only {len(doc.tables)} tables, skipping Table 1 (Bên B)")
+    else:
+        table_b = doc.tables[1]
+        
+        dia_chi = data.get("dia_chi", "")
+        mst = data.get("mst", "")
+        sdt = data.get("sdt", "")
+        gmail = data.get("gmail", "")
+        cccd = data.get("cccd", "")
+        cccd_ngay_cap = _format_date_vn(data.get("cccd_ngay_cap", ""))
+        cccd_noi_cap = data.get("cccd_noi_cap", "")
+        stk = data.get("stk", "")
+        
+        # Row 0: BÊN B: [Tên]
+        _safe_set_cell(table_b, 0, 0, f"BÊN B: {ho_ten}", bold=True)
+        
+        # Row 1: Địa chỉ
+        if dia_chi:
+            _safe_set_cell(table_b, 1, 1, dia_chi)
+        
+        # Row 2: MST
+        if mst:
+            _safe_set_cell(table_b, 2, 1, mst)
+        
+        # Row 3: SĐT
+        if sdt:
+            _safe_set_cell(table_b, 3, 1, str(sdt))
+        
+        # Row 4: Gmail
+        if gmail:
+            _safe_set_cell(table_b, 4, 1, gmail)
+        
+        # Row 5: CCCD + cấp ngày
+        if cccd:
+            _safe_set_cell(table_b, 5, 0, f"CCCD: {cccd}", bold=True)
+        cccd_detail = f"cấp ngày {cccd_ngay_cap} tại {cccd_noi_cap}"
+        _safe_set_cell(table_b, 5, 1, cccd_detail)
+        
+        # Row 6: STK
+        if stk:
+            _safe_set_cell(table_b, 6, 1, str(stk))
     
     # === 3. Fill Paragraph-level data (Điều 2, 3) ===
+    # Note: paragraph indices are template-specific, wrap in try-except
     thuong_hieu = data.get("thuong_hieu", "")
     ngay_du_kien_air = data.get("ngay_du_kien_air", "")
     hoa_hong_tu_nhien = data.get("hoa_hong_tu_nhien", "")
     hoa_hong_chay_ads = data.get("hoa_hong_chay_ads", "")
+    num_paras = len(doc.paragraphs)
     
-    # Para 24: "Kallé Feum" → Thương hiệu
-    if thuong_hieu:
-        p24 = doc.paragraphs[24]
-        if len(p24.runs) > 18:
-            p24.runs[16].text = str(thuong_hieu)  # Replace "Kallé"
-            p24.runs[17].text = ""                 # Clear space
-            p24.runs[18].text = ""                 # Clear "Feum"
-    
-    # Para 25: "08/02/2026" → Ngày dự kiến air, "charminglae" → ID KOC
-    if ngay_du_kien_air or id_koc:
-        p25 = doc.paragraphs[25]
-        if len(p25.runs) > 30:
-            if ngay_du_kien_air:
-                # Convert timestamp (ms) to date string if needed
-                date_str = _format_date_field(ngay_du_kien_air)
-                p25.runs[12].text = date_str
-            if id_koc and id_koc != "N/A":
-                p25.runs[30].text = str(id_koc)
-    
-    # Para 29: Commission "5% tự nhiên + 5% chạy ads"
-    if hoa_hong_tu_nhien or hoa_hong_chay_ads:
-        p29 = doc.paragraphs[29]
-        if len(p29.runs) > 7:
-            if hoa_hong_tu_nhien:
-                val = _format_percent(hoa_hong_tu_nhien)
-                p29.runs[3].text = f"{val}% "
-            if hoa_hong_chay_ads:
-                val = _format_percent(hoa_hong_chay_ads)
-                p29.runs[7].text = f" {val}% "
-    
-    # Para 36: "charminglae" in payment section → ID KOC
-    if id_koc and id_koc != "N/A":
-        p36 = doc.paragraphs[36]
-        if len(p36.runs) > 15:
-            p36.runs[15].text = str(id_koc)
+    try:
+        # Para 24: "Kallé Feum" → Thương hiệu
+        if thuong_hieu and num_paras > 24:
+            p24 = doc.paragraphs[24]
+            if len(p24.runs) > 18:
+                p24.runs[16].text = str(thuong_hieu)
+                p24.runs[17].text = ""
+                p24.runs[18].text = ""
+        
+        # Para 25: "08/02/2026" → Ngày dự kiến air, "charminglae" → ID KOC
+        if (ngay_du_kien_air or id_koc) and num_paras > 25:
+            p25 = doc.paragraphs[25]
+            if len(p25.runs) > 30:
+                if ngay_du_kien_air:
+                    date_str = _format_date_field(ngay_du_kien_air)
+                    p25.runs[12].text = date_str
+                if id_koc and id_koc != "N/A":
+                    p25.runs[30].text = str(id_koc)
+        
+        # Para 29: Commission "5% tự nhiên + 5% chạy ads"
+        if (hoa_hong_tu_nhien or hoa_hong_chay_ads) and num_paras > 29:
+            p29 = doc.paragraphs[29]
+            if len(p29.runs) > 7:
+                if hoa_hong_tu_nhien:
+                    val = _format_percent(hoa_hong_tu_nhien)
+                    p29.runs[3].text = f"{val}% "
+                if hoa_hong_chay_ads:
+                    val = _format_percent(hoa_hong_chay_ads)
+                    p29.runs[7].text = f" {val}% "
+        
+        # Para 36: "charminglae" in payment section → ID KOC
+        if id_koc and id_koc != "N/A" and num_paras > 36:
+            p36 = doc.paragraphs[36]
+            if len(p36.runs) > 15:
+                p36.runs[15].text = str(id_koc)
+    except (IndexError, AttributeError) as e:
+        print(f"⚠️ Paragraph fill skipped (template structure differs): {e}")
     
     # === 4. Insert CCCD images ===
     cccd_truoc_path = data.get("cccd_truoc_path", "")
@@ -546,74 +570,72 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     
     if cccd_truoc_path and os.path.exists(cccd_truoc_path):
         fsize = os.path.getsize(cccd_truoc_path)
-        if fsize > 100:  # skip if file too small (corrupted)
+        if fsize > 100 and num_paras > 112:
             _insert_cccd_image(doc, 112, cccd_truoc_path)
-        else:
+        elif fsize <= 100:
             print(f"⚠️ CCCD front file too small: {fsize} bytes")
+        else:
+            print(f"⚠️ Template has {num_paras} paragraphs, skipping CCCD front (needs para 112)")
     
     if cccd_sau_path and os.path.exists(cccd_sau_path):
         fsize = os.path.getsize(cccd_sau_path)
-        if fsize > 100:
+        if fsize > 100 and num_paras > 117:
             _insert_cccd_image(doc, 117, cccd_sau_path)
-        else:
+        elif fsize <= 100:
             print(f"⚠️ CCCD back file too small: {fsize} bytes")
+        else:
+            print(f"⚠️ Template has {num_paras} paragraphs, skipping CCCD back (needs para 117)")
     
-    # === 3. Fill Table 2 - Payment Details (Phí dịch vụ) ===
-    table_pay = doc.tables[2]
-    
-    thanh_tien = data.get("thanh_tien", "")
-    chi_phi = data.get("chi_phi", "")
-    so_luong_clip = data.get("so_luong_clip", "")
-    thue_tncn = data.get("thue_tncn", "")
-    tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
-    
-    # Fallback: calculate chi_phi from thanh_tien / so_luong_clip
-    if not chi_phi and thanh_tien and so_luong_clip:
-        try:
-            chi_phi = str(int(float(str(thanh_tien)) / float(str(so_luong_clip))))
-            print(f"💰 Chi phí calculated: {thanh_tien} / {so_luong_clip} = {chi_phi}")
-        except (ValueError, ZeroDivisionError):
-            pass
-    
-    # Auto-calculate chi_phi (đơn giá) = thanh_tien / so_luong_clip if not provided
-    if not chi_phi and thanh_tien and so_luong_clip:
-        try:
-            tt_val = float(str(thanh_tien))
-            sl_val = float(str(so_luong_clip))
-            if sl_val > 0:
-                chi_phi = str(int(tt_val / sl_val))
-                print(f"💰 Auto-calculated chi_phi: {thanh_tien} / {so_luong_clip} = {chi_phi}")
-        except (ValueError, ZeroDivisionError):
-            pass
-    
-    # Row 1: Chi phí một clip → Số lượng, Đơn giá(Chi phí), Tổng cộng(Thành tiền)
-    if so_luong_clip:
-        _set_cell_text(table_pay.rows[1].cells[2], str(int(float(str(so_luong_clip)))), bold=True, font_size=13)
-    if chi_phi:
-        formatted_cp = _format_currency_vn(chi_phi)
-        _set_cell_text(table_pay.rows[1].cells[3], formatted_cp, bold=True, font_size=13)
-    if thanh_tien:
-        formatted_tt = _format_currency_vn(thanh_tien)
-        _set_cell_text(table_pay.rows[1].cells[4], formatted_tt, bold=True, font_size=13)
-    
-    # Row 2: TNCN (10%) → Đơn giá, Tổng cộng
-    if thue_tncn:
-        formatted_tncn = _format_currency_vn(thue_tncn)
-        _set_cell_text(table_pay.rows[2].cells[3], formatted_tncn, bold=True, font_size=13)
-        _set_cell_text(table_pay.rows[2].cells[4], formatted_tncn, bold=True, font_size=13)
-    
-    # Row 3: Tổng giá trị sau thuế → Tổng cộng
-    if tong_gia_tri_sau_thue:
-        formatted_tgst = _format_currency_vn(tong_gia_tri_sau_thue)
-        _set_cell_text(table_pay.rows[3].cells[4], formatted_tgst, bold=True, font_size=13)
-    
-    # Row 4: Bằng chữ → convert to Vietnamese words
-    if tong_gia_tri_sau_thue:
-        bang_chu = f"Bằng chữ: {_number_to_vietnamese_words(tong_gia_tri_sau_thue)}"
-        _set_cell_text(table_pay.rows[4].cells[0], bang_chu, bold=True)
-        # Set italic on the run
-        if table_pay.rows[4].cells[0].paragraphs[0].runs:
-            table_pay.rows[4].cells[0].paragraphs[0].runs[0].italic = True
+    # === 5. Fill Table 2 - Payment Details (Phí dịch vụ) ===
+    if len(doc.tables) < 3:
+        print(f"⚠️ Template has only {len(doc.tables)} tables, skipping Table 2 (Payment)")
+    else:
+        table_pay = doc.tables[2]
+        
+        thanh_tien = data.get("thanh_tien", "")
+        chi_phi = data.get("chi_phi", "")
+        so_luong_clip = data.get("so_luong_clip", "")
+        thue_tncn = data.get("thue_tncn", "")
+        tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
+        
+        # Fallback: calculate chi_phi from thanh_tien / so_luong_clip
+        if not chi_phi and thanh_tien and so_luong_clip:
+            try:
+                chi_phi = str(int(float(str(thanh_tien)) / float(str(so_luong_clip))))
+                print(f"💰 Chi phí calculated: {thanh_tien} / {so_luong_clip} = {chi_phi}")
+            except (ValueError, ZeroDivisionError):
+                pass
+        
+        # Row 1: Chi phí một clip → Số lượng, Đơn giá(Chi phí), Tổng cộng(Thành tiền)
+        if so_luong_clip:
+            _safe_set_cell(table_pay, 1, 2, str(int(float(str(so_luong_clip)))), bold=True, font_size=13)
+        if chi_phi:
+            formatted_cp = _format_currency_vn(chi_phi)
+            _safe_set_cell(table_pay, 1, 3, formatted_cp, bold=True, font_size=13)
+        if thanh_tien:
+            formatted_tt = _format_currency_vn(thanh_tien)
+            _safe_set_cell(table_pay, 1, 4, formatted_tt, bold=True, font_size=13)
+        
+        # Row 2: TNCN (10%) → Đơn giá, Tổng cộng
+        if thue_tncn:
+            formatted_tncn = _format_currency_vn(thue_tncn)
+            _safe_set_cell(table_pay, 2, 3, formatted_tncn, bold=True, font_size=13)
+            _safe_set_cell(table_pay, 2, 4, formatted_tncn, bold=True, font_size=13)
+        
+        # Row 3: Tổng giá trị sau thuế → Tổng cộng
+        if tong_gia_tri_sau_thue:
+            formatted_tgst = _format_currency_vn(tong_gia_tri_sau_thue)
+            _safe_set_cell(table_pay, 3, 4, formatted_tgst, bold=True, font_size=13)
+        
+        # Row 4: Bằng chữ → convert to Vietnamese words
+        if tong_gia_tri_sau_thue:
+            bang_chu = f"Bằng chữ: {_number_to_vietnamese_words(tong_gia_tri_sau_thue)}"
+            try:
+                _safe_set_cell(table_pay, 4, 0, bang_chu, bold=True)
+                if table_pay.rows[4].cells[0].paragraphs[0].runs:
+                    table_pay.rows[4].cells[0].paragraphs[0].runs[0].italic = True
+            except (IndexError, AttributeError):
+                pass
     
     # === 3. Chuẩn hóa formatting toàn bộ ===
     _normalize_formatting(doc)
