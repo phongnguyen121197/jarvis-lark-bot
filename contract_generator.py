@@ -233,11 +233,22 @@ def _format_percent(value) -> str:
 def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
     """
     Insert CCCD image after the title paragraph (e.g. 'Mặt trước CCCD').
-    Image fits within page width (~14cm for contract margins).
+    Converts image to JPEG via Pillow first to handle formats docx can't read.
     """
     try:
         from docx.shared import Cm
-        import traceback
+        from PIL import Image as PILImage
+        import io, traceback
+        
+        # Convert image to JPEG bytes via Pillow (handles HEIC, WebP, corrupted headers)
+        img = PILImage.open(image_path)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        
+        print(f"📐 CCCD image {image_path}: {img.size[0]}x{img.size[1]}, converted to JPEG ({buf.getbuffer().nbytes} bytes)")
         
         # Find first empty paragraph after the title to insert image
         target_para = None
@@ -255,8 +266,8 @@ def _insert_cccd_image(doc: Document, para_index: int, image_path: str):
             run.text = ""
         
         run = target_para.add_run()
-        run.add_picture(image_path, width=Cm(14))
-        print(f"✅ Inserted CCCD image at para {para_index}: {image_path}")
+        run.add_picture(buf, width=Cm(14))
+        print(f"✅ Inserted CCCD image at para {para_index}")
     except Exception as e:
         print(f"⚠️ Failed to insert CCCD image at para {para_index}: {type(e).__name__}: {e}")
         traceback.print_exc()

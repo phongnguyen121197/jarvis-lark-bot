@@ -113,7 +113,11 @@ def download_attachment(file_token: str, save_path: str) -> bool:
             with open(save_path, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     f.write(chunk)
-            print(f"✅ Downloaded attachment: {file_token} → {save_path}")
+            fsize = os.path.getsize(save_path)
+            # Log first bytes for format detection
+            with open(save_path, "rb") as f:
+                header = f.read(16)
+            print(f"✅ Downloaded attachment: {file_token} → {save_path} ({fsize} bytes, header={header[:8]})")
             return True
         else:
             print(f"❌ Download attachment failed: {resp.status_code} {resp.text[:200]}")
