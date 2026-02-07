@@ -210,6 +210,7 @@ def add_field_options(app_token: str, table_id: str, field_id: str, existing_opt
         all_options.append({"name": name})
     
     body = {
+        "type": 3,  # 3 = single_select (required by Lark API)
         "property": {
             "options": all_options
         }
@@ -219,7 +220,8 @@ def add_field_options(app_token: str, table_id: str, field_id: str, existing_opt
     data = resp.json()
     
     if data.get("code") != 0:
-        print(f"❌ add_field_options error: {data.get('msg')}")
+        print(f"❌ add_field_options error: {data.get('msg')} (code={data.get('code')})")
+        print(f"   Request body: {body}")
         return {"error": data.get("msg")}
     
     print(f"✅ Field options updated: +{len(new_options)} → {[o for o in new_options]}")
