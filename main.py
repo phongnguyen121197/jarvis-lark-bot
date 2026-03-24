@@ -78,7 +78,6 @@ GROUP_CHATS = {
     "mkt_team": "oc_768c8b7b8680299e36fe889de677578a",
 }
 
-TIKTOK_ALERT_CHAT_ID = os.getenv("TIKTOK_ALERT_CHAT_ID", GROUP_CHATS.get("digital", ""))
 
 # ============ CONTRACT GENERATOR CONFIG ============
 CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "XfHGbvXrRaK1zcsTZ1zl5QR3ghf")
@@ -382,11 +381,6 @@ Xin chào! Tôi là Jarvis, trợ lý ảo hỗ trợ team Marketing.
 • `KPI của Linh` - KPI cá nhân CHENG
 
 ━━━━━━━━━━━━━━━━━━━━━━
-💰 **TIKTOK ADS**
-━━━━━━━━━━━━━━━━━━━━━━
-• `TKQC` hoặc `Dư nợ TikTok Ads` - Xem dư nợ
-
-━━━━━━━━━━━━━━━━━━━━━━
 📝 **GHI NHỚ (NOTES)**
 ━━━━━━━━━━━━━━━━━━━━━━
 • `Ghi nhớ: [nội dung]` - Tạo ghi nhớ
@@ -415,20 +409,6 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
     send_report_result = check_send_report_command(text)
     if send_report_result:
         return await handle_send_report_to_group(send_report_result)
-    
-    from tiktok_ads_crawler import is_tiktok_ads_query, get_spending_data, format_spending_report
-    
-    if any(kw in text.lower() for kw in ['check tkqc', 'kiểm tra tkqc', 'kiem tra tkqc']):
-        if TIKTOK_ALERT_CHAT_ID:
-            await check_tiktok_ads_warning()
-            return "✅ Đã kiểm tra dư nợ TikTok Ads. Nếu > 85% sẽ gửi cảnh báo vào nhóm Digital!"
-        else:
-            return "❌ Chưa cấu hình nhóm nhận cảnh báo TikTok Ads"
-    
-    if is_tiktok_ads_query(text):
-        force_refresh = any(kw in text.lower() for kw in ['refresh', 'làm mới', 'lam moi', 'update', 'cập nhật'])
-        result = await get_spending_data(force_refresh=force_refresh)
-        return format_spending_report(result)
     
     intent_result = classify_intent(text)
     intent = intent_result.get("intent")
@@ -506,8 +486,7 @@ async def process_jarvis_query(text: str, chat_id: str = "") -> str:
                 "• Báo cáo KOC: \"Tóm tắt KOC tháng 12\"\n"
                 "• KPI KALLE: \"KPI của Mai tháng 12\"\n"
                 "• KPI CHENG: \"KPI của Phương tháng 12\"\n"
-                "• Dư nợ TikTok Ads: \"TKQC\"\n"
-                "• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n\n"
+"• Ghi nhớ: \"Note: công việc deadline 2 ngày\"\n\n"
                 "Hãy thử hỏi tôi nhé! 😊"
             )
     
@@ -660,62 +639,6 @@ async def check_and_send_reminders():
     return reminders_sent
 
 
-_tiktok_warning_sent_today = {"date": None, "sent": False}
-
-async def check_tiktok_ads_warning():
-    """
-    Scheduled check for TikTok Ads spending
-    - Always sends a status report every 3 days
-    - Sends urgent warning if ratio >= threshold
-    """
-    if not TIKTOK_ALERT_CHAT_ID:
-        return
-    
-    print("🔍 Scheduled TikTok Ads check running...")
-    
-    try:
-        from tiktok_ads_crawler import get_spending_data, WARNING_THRESHOLD, format_spending_report
-        result = await get_spending_data(force_refresh=True)
-        
-        if result.get("success"):
-            spending = result.get("spending", 0)
-            credit_limit = result.get("credit_limit", 1)
-            ratio = (spending / credit_limit * 100) if credit_limit > 0 else 0
-            
-            print(f"📊 Current ratio: {ratio:.1f}% (threshold: {WARNING_THRESHOLD}%)")
-            
-            if ratio >= WARNING_THRESHOLD:
-                # Urgent warning
-                warning_msg = (
-                    f"🚨 **CẢNH BÁO DƯ NỢ TIKTOK ADS**\n\n"
-                    f"⚠️ Đã sử dụng **{ratio:.1f}%** hạn mức!\n\n"
-                    f"💳 Dư nợ: **{spending:,.0f}** / {credit_limit:,.0f} VND\n"
-                    f"📅 Cập nhật: {result.get('updated_at', 'N/A')}\n\n"
-                    f"💡 Vui lòng chuẩn bị thanh toán hoặc tăng hạn mức."
-                )
-                await send_lark_message(TIKTOK_ALERT_CHAT_ID, warning_msg)
-                print(f"🚨 Sent URGENT TikTok warning (ratio: {ratio:.1f}%)")
-            else:
-                # Regular status report (every 3 days)
-                status_msg = (
-                    f"📊 **Báo cáo định kỳ TikTok Ads**\n\n"
-                    f"💳 Dư nợ hiện tại: **{spending:,.0f}** VND\n"
-                    f"📈 Đã sử dụng: **{ratio:.1f}%** hạn mức\n"
-                    f"🏦 Hạn mức: {credit_limit:,.0f} VND\n"
-                    f"📅 Cập nhật: {result.get('updated_at', 'N/A')}\n\n"
-                    f"✅ Mức sử dụng an toàn (< {WARNING_THRESHOLD}%)"
-                )
-                await send_lark_message(TIKTOK_ALERT_CHAT_ID, status_msg)
-                print(f"📊 Sent periodic TikTok status report (ratio: {ratio:.1f}%)")
-        else:
-            error_msg = f"❌ Không thể kiểm tra TikTok Ads: {result.get('error')}"
-            await send_lark_message(TIKTOK_ALERT_CHAT_ID, error_msg)
-            print(f"❌ Failed to get TikTok data: {result.get('error')}")
-    except Exception as e:
-        print(f"❌ TikTok warning check error: {e}")
-        import traceback
-        traceback.print_exc()
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -735,17 +658,7 @@ async def startup_event():
         replace_existing=True
     )
     
-    # Job 3: v5.7.22 - Check TikTok Ads (9h VÀ 17h hàng ngày)
-    if TIKTOK_ALERT_CHAT_ID:
-        scheduler.add_job(
-            check_tiktok_ads_warning,
-            CronTrigger(hour="9,17", minute=0, timezone=TIMEZONE),
-            id="tiktok_ads_warning",
-            replace_existing=True
-        )
-        print(f"📊 TikTok Ads scheduled check: Everyday at 9:00 AM and 17:00 PM")
-    
-    # Job 4: v5.7.25 - Daily Booking Report (9h hàng ngày, kết thúc 14/2/2026)
+    # Job 3: v5.7.25 - Daily Booking Report (9h hàng ngày, kết thúc 14/2/2026)
     scheduler.add_job(
         send_daily_booking_reports,
         CronTrigger(hour=9, minute=0, timezone=TIMEZONE, end_date="2026-02-14"),
