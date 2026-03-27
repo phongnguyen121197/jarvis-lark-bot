@@ -276,8 +276,13 @@ def _format_currency_vn(amount) -> str:
     if not amount and amount != 0:
         return ""
     try:
-        s = str(amount).replace(",", "").replace(".", "").strip()
-        num = int(float(s)) if s else 0
+        s = str(amount).replace(",", "").strip()
+        # Single dot = decimal point (e.g. Lark returns float 11111111.0)
+        # Multiple dots = VN thousands separator (e.g. "11.111.111")
+        if s.count(".") == 1:
+            num = int(float(s))
+        else:
+            num = int(float(s.replace(".", ""))) if s else 0
         if num == 0:
             return "0"
         return f"{num:,}".replace(",", ".")
@@ -350,7 +355,11 @@ def _get_current_date_vn() -> str:
 def _number_to_vietnamese_words(number) -> str:
     """Chuyển số thành chữ tiếng Việt."""
     try:
-        n = int(float(str(number).replace(",", "").replace(".", "").strip()))
+        s = str(number).replace(",", "").strip()
+        if s.count(".") == 1:
+            n = int(float(s))
+        else:
+            n = int(float(s.replace(".", ""))) if s else 0
     except (ValueError, TypeError):
         return ""
     
