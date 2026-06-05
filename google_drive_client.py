@@ -136,6 +136,8 @@ class GoogleDriveClient:
             fields="files(id, name, modifiedTime, mimeType)",
             orderBy="modifiedTime desc",
             pageSize=1,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         ).execute()
         
         files = result.get("files", [])

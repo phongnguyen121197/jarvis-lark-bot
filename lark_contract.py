@@ -194,7 +194,7 @@ def get_field_options(app_token: str, table_id: str, field_name: str) -> dict:
     return {}
 
 
-def add_field_options(app_token: str, table_id: str, field_id: str, existing_options: list, new_options: list, field_name: str = "Template") -> dict:
+def add_field_options(app_token: str, table_id: str, field_id: str, existing_options: list, new_options: list, field_name: str = "Template", field_type: int = 3) -> dict:
     """
     Add new options to a single_select field while keeping existing ones.
     existing_options: raw option objects from field property (with id, name, color)
@@ -216,7 +216,7 @@ def add_field_options(app_token: str, table_id: str, field_id: str, existing_opt
     
     body = {
         "field_name": field_name,
-        "type": 3,
+        "type": field_type,
         "property": {
             "options": all_options
         }

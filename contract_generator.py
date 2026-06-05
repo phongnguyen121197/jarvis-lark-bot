@@ -23,6 +23,7 @@ Supported placeholders:
   {SO_LUONG_CLIP}       - Số lượng clip
   {CHI_PHI}             - Chi phí 1 clip (formatted: 300.000)
   {THANH_TIEN}          - Thành tiền (formatted: 300.000)
+  {PHAN_TRAM_THUE_TNCN} - % thuế TNCN
   {THUE_TNCN}           - Thuế TNCN (formatted: 30.000)
   {TONG_SAU_THUE}       - Tổng giá trị sau thuế (formatted: 270.000)
   {BANG_CHU}            - Bằng chữ (Hai trăm bảy mươi nghìn đồng.)
@@ -520,6 +521,7 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     thanh_tien = data.get("thanh_tien", "")
     chi_phi = data.get("chi_phi", "")
     so_luong_clip = data.get("so_luong_clip", "")
+    phan_tram_thue_tncn = _format_percent(data.get("phan_tram_thue_tncn", ""))
     thue_tncn = data.get("thue_tncn", "")
     tong_gia_tri_sau_thue = data.get("tong_gia_tri_sau_thue", "")
     
@@ -566,6 +568,7 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
         "{SO_LUONG_CLIP}": str(so_luong_clip),
         "{CHI_PHI}": _format_currency_vn(chi_phi),
         "{THANH_TIEN}": _format_currency_vn(thanh_tien),
+        "{PHAN_TRAM_THUE_TNCN}": str(phan_tram_thue_tncn),
         "{THUE_TNCN}": _format_currency_vn(thue_tncn),
         "{TONG_SAU_THUE}": _format_currency_vn(tong_gia_tri_sau_thue),
         "{BANG_CHU}": str(bang_chu),
@@ -646,8 +649,9 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "stk": fields.get("STK bên B", ""),
         # Payment
         "chi_phi": fields.get("Chi phí", ""),
-        "thanh_tien": fields.get("Thành Tiền", fields.get("Thành Tiên", "")),
+        "thanh_tien": fields.get("Thành tiền", fields.get("Thành Tiền", fields.get("Thành Tiên", ""))),
         "so_luong_clip": fields.get("Số lượng clip", ""),
+        "phan_tram_thue_tncn": fields.get("% thuế TNCN", fields.get("% Thuế TNCN", fields.get("Thuế suất TNCN", ""))),
         "thue_tncn": fields.get("Thuế TNCN", ""),
         "tong_gia_tri_sau_thue": fields.get("Tổng giá trị sau thuế", ""),
         # Paragraph fields

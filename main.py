@@ -1246,6 +1246,7 @@ async def test_contract_generate():
 # ║             SYNC TEMPLATES: Drive → Lark Base dropdown         ║
 # ╚════════════════════════════════════════════════════════════════╝
 
+@app.get("/webhook/sync-templates")
 @app.post("/webhook/sync-templates")
 async def handle_sync_templates(request: Request):
     """
@@ -1255,20 +1256,26 @@ async def handle_sync_templates(request: Request):
     Trigger: Button click trong Lark Automation.
     """
     try:
-        print("🔄 Sync templates webhook received")
+        wait = request.query_params.get("wait", "").lower() in {"1", "true", "yes"}
+        print(f"🔄 Sync templates webhook received (wait={wait})")
 
-        thread = threading.Thread(
-            target=_sync_templates_sync,
-            daemon=True,
-        )
+        if wait:
+            return _sync_templates_sync()
+
+        thread = threading.Thread(target=_sync_templates_sync, daemon=True)
         thread.start()
 
-        return {"success": True, "status": "syncing"}
+        return {"success": True, "status": "syncing", "hint": "Add ?wait=true to return sync details"}
 
     except Exception as e:
         print(f"❌ Sync templates error: {e}")
         return {"success": False, "error": str(e)}
 
+
+@app.get("/test/sync-templates")
+async def test_sync_templates():
+    """Debug endpoint: run Drive → Lark Template sync and return full result."""
+    return _sync_templates_sync()
 
 def _sync_templates_sync():
     """Background: scan Drive template folder → update Lark field options."""
@@ -1284,18 +1291,20 @@ def _sync_templates_sync():
         drive_client = get_drive_client()
         if not drive_client:
             print("❌ [Sync] Drive client not available")
-            return
+            return {"success": False, "error": "Drive client not available"}
 
         folder_id = GOOGLE_DRIVE_TEMPLATE_FOLDER_ID
         if not folder_id:
             print("❌ [Sync] GOOGLE_DRIVE_TEMPLATE_FOLDER_ID not set")
-            return
+            return {"success": False, "error": "GOOGLE_DRIVE_TEMPLATE_FOLDER_ID not set"}
 
         query = f"'{folder_id}' in parents and trashed = false"
         result = drive_client.service.files().list(
             q=query,
             fields="files(id, name, mimeType)",
             pageSize=100,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         ).execute()
         drive_files = result.get("files", [])
 
@@ -1314,7 +1323,12 @@ def _sync_templates_sync():
 
         if not drive_names:
             print("⚠️ [Sync] No templates found in Drive folder")
-            return
+            return {
+                "success": False,
+                "error": "No templates found in Drive folder",
+                "folder_id": folder_id,
+                "drive_files": drive_files,
+            }
 
         # 2. Get current Lark field options
         field_info = get_field_options(
@@ -1322,7 +1336,12 @@ def _sync_templates_sync():
         )
         if not field_info:
             print("❌ [Sync] Field 'Template' not found in Lark Base")
-            return
+            return {
+                "success": False,
+                "error": "Field 'Template' not found in Lark Base",
+                "folder_id": folder_id,
+                "drive_templates": sorted(drive_names),
+            }
 
         field_id = field_info["field_id"]
         field_type = field_info.get("type", 3)
@@ -1336,24 +1355,51 @@ def _sync_templates_sync():
         new_names = drive_names - current_options
         if not new_names:
             print(f"✅ [Sync] Already in sync — no new templates ({_time.time()-t0:.1f}s)")
-            return
+            return {
+                "success": True,
+                "status": "already_in_sync",
+                "folder_id": folder_id,
+                "drive_templates": sorted(drive_names),
+                "lark_options": sorted(current_options),
+                "added": [],
+                "elapsed_sec": round(_time.time() - t0, 1),
+            }
 
         # 4. Add new options
         result = add_field_options(
             CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID,
             field_id, existing_property_options, sorted(new_names),
-            field_name="Template"
+            field_name="Template", field_type=field_type
         )
 
         if "error" not in result:
             print(f"✅ [Sync] Added {len(new_names)} templates: {sorted(new_names)} ({_time.time()-t0:.1f}s)")
+            return {
+                "success": True,
+                "status": "updated",
+                "folder_id": folder_id,
+                "drive_templates": sorted(drive_names),
+                "lark_options_before": sorted(current_options),
+                "added": sorted(new_names),
+                "elapsed_sec": round(_time.time() - t0, 1),
+            }
         else:
             print(f"❌ [Sync] Failed: {result}")
+            return {
+                "success": False,
+                "error": result.get("error", "Failed to update field options"),
+                "folder_id": folder_id,
+                "drive_templates": sorted(drive_names),
+                "lark_options": sorted(current_options),
+                "new_names": sorted(new_names),
+                "raw_result": result,
+            }
 
     except Exception as e:
         print(f"❌ [Sync] Error: {e}")
         import traceback
         traceback.print_exc()
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
     
     sys.stdout.flush()
 
