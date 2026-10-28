@@ -177,6 +177,37 @@ def list_fields(app_token: str, table_id: str) -> list:
     return data.get("data", {}).get("items", [])
 
 
+_option_map_cache: dict = {}   # (app_token, table_id) → {"ts": float, "map": {opt_id: name}}
+OPTION_MAP_TTL_SEC = 600
+
+
+def get_option_map(app_token: str, table_id: str, force: bool = False) -> dict:
+    """
+    Map {option_id → option_name} của TẤT CẢ cột single/multi-select trong bảng.
+    Dùng để dịch giá trị 'optXXXX' mà Automation/API đôi khi trả về thay vì tên.
+    Cache 10 phút cho mỗi bảng.
+    """
+    import time as _time
+    key = (app_token, table_id)
+    cached = _option_map_cache.get(key)
+    if cached and not force and _time.time() - cached["ts"] < OPTION_MAP_TTL_SEC:
+        return cached["map"]
+
+    opt_map = {}
+    try:
+        for f in list_fields(app_token, table_id):
+            for opt in (f.get("property") or {}).get("options") or []:
+                oid, oname = opt.get("id"), opt.get("name")
+                if oid and oname:
+                    opt_map[oid] = oname
+        _option_map_cache[key] = {"ts": _time.time(), "map": opt_map}
+    except Exception as e:
+        print(f"⚠️ get_option_map error: {e}")
+        if cached:
+            return cached["map"]
+    return opt_map
+
+
 def get_field_options(app_token: str, table_id: str, field_name: str) -> dict:
     """
     Get a single_select field's info including current options.

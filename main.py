@@ -1065,8 +1065,8 @@ def _process_contract_sync(record_id: str, fields: dict, profile: dict = None):
     import time as _time
     import tempfile
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from lark_contract import update_record as lark_update_record, fetch_cccd_images, get_record
-    from contract_generator import backfill_fields_from_record
+    from lark_contract import update_record as lark_update_record, fetch_cccd_images, get_record, get_option_map
+    from contract_generator import backfill_fields_from_record, _looks_like_option_id
 
     if profile is None:
         profile = get_contract_profile("default")
@@ -1083,20 +1083,49 @@ def _process_contract_sync(record_id: str, fields: dict, profile: dict = None):
         print(f"🔄 {tag} Start: {ho_ten} base={app_token} table={table_id}")
         sys.stdout.flush()
 
-        # 0a. Đọc record từ Lark 1 lần: bù cột thiếu trong body webhook + lấy ảnh CCCD
+        # 0a. Đọc record từ Lark (tối đa 3 lần — Lark thỉnh thoảng timeout /
+        #     "Data not ready"): bù cột thiếu trong body webhook + lấy ảnh CCCD
         record = None
+        for attempt in range(1, 4):
+            try:
+                rec = get_record(app_token, table_id, record_id)
+                if rec and "error" not in rec:
+                    record = rec
+                    break
+                print(f"⚠️ {tag} Record read attempt {attempt}/3: {rec.get('error') if rec else 'empty'}")
+            except Exception as rec_err:
+                print(f"⚠️ {tag} Record read attempt {attempt}/3 failed: {rec_err}")
+            if attempt < 3:
+                _time.sleep(2 * attempt)
+        if record is None:
+            print(f"⚠️ {tag} Could not read record, using webhook body only")
+
+        # 0b. Bù cột thiếu + dịch option-id ('optXXXX') → tên option.
+        #     Chỉ tra bảng option khi thật sự có giá trị dạng option-id.
+        record_fields = record.get("fields", {}) if record else {}
+        option_map = {}
         try:
-            record = get_record(app_token, table_id, record_id)
-            if record and "error" not in record:
-                filled = backfill_fields_from_record(fields, record.get("fields", {}))
-                if filled:
-                    print(f"🧩 {tag} Backfilled from Lark record: {filled}")
-            else:
-                record = None
-                print(f"⚠️ {tag} Could not read record for backfill, using webhook body only")
-        except Exception as rec_err:
-            record = None
-            print(f"⚠️ {tag} Record read skipped: {rec_err}")
+            needs_map = any(
+                _looks_like_option_id(v)
+                for v in list(fields.values()) + list(record_fields.values())
+            )
+            if needs_map:
+                option_map = get_option_map(app_token, table_id)
+                print(f"🔎 {tag} Option map loaded: {len(option_map)} options")
+        except Exception as map_err:
+            print(f"⚠️ {tag} Option map skipped: {map_err}")
+        try:
+            filled = backfill_fields_from_record(fields, record_fields, option_map)
+            if filled:
+                print(f"🧩 {tag} Backfilled/resolved from Lark record: {filled}")
+            # Option-id không dịch được → để trống thay vì in 'optXXXX' vào hợp đồng
+            unresolved = [k for k, v in fields.items() if _looks_like_option_id(v)]
+            for k in unresolved:
+                fields[k] = ""
+            if unresolved:
+                print(f"⚠️ {tag} Unresolved option ids blanked: {unresolved}")
+        except Exception as bf_err:
+            print(f"⚠️ {tag} Backfill skipped: {bf_err}")
 
         contract_data = parse_lark_record_to_contract_data(fields)
         id_koc = contract_data.get("id_koc", "N/A")

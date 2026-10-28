@@ -686,23 +686,41 @@ def _is_blank(value) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
-def backfill_fields_from_record(fields: Dict, record_fields: Dict) -> List[str]:
+_OPTION_ID_RE = re.compile(r"^opt[A-Za-z0-9]{6,}$")
+
+
+def _looks_like_option_id(value) -> bool:
+    """Lark Automation đôi khi gửi ID option của cột single-select (vd 'opt5pCP3yN')
+    thay vì tên option. Nhận diện để thay bằng tên thật."""
+    return isinstance(value, str) and bool(_OPTION_ID_RE.match(value.strip()))
+
+
+def backfill_fields_from_record(fields: Dict, record_fields: Dict, option_map: Dict[str, str] = None) -> List[str]:
     """
     Bù những cột bị thiếu/trống trong body webhook bằng giá trị đọc trực tiếp
     từ record Lark (API trả về: text → str/list segment, link → dict,
     số → số, ngày → ms timestamp, formula → số/str/list).
-    Sửa `fields` tại chỗ, trả về danh sách tên cột đã bù.
+    Giá trị dạng option-id ('optXXXX') cũng được coi là cần thay: ưu tiên lấy
+    tên từ record, không có thì tra `option_map` (id → tên option của bảng).
+    Sửa `fields` tại chỗ, trả về danh sách tên cột đã bù/sửa.
     """
     filled = []
-    if not record_fields:
-        return filled
+    option_map = option_map or {}
     for name in CONTRACT_FIELD_NAMES:
-        if not _is_blank(fields.get(name)):
+        current = fields.get(name)
+        if not _is_blank(current) and not _looks_like_option_id(current):
             continue
-        raw = record_fields.get(name)
-        if _is_blank(raw):
-            continue
-        value = raw if isinstance(raw, (int, float)) and not isinstance(raw, bool) else _plain_text(raw)
+
+        raw = (record_fields or {}).get(name)
+        value = None
+        if not _is_blank(raw):
+            value = raw if isinstance(raw, (int, float)) and not isinstance(raw, bool) else _plain_text(raw)
+            if _looks_like_option_id(value):
+                value = option_map.get(value.strip(), None)
+
+        if _is_blank(value) and _looks_like_option_id(current):
+            value = option_map.get(current.strip(), None)
+
         if _is_blank(value):
             continue
         fields[name] = value
