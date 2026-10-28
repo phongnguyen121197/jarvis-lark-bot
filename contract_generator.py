@@ -488,15 +488,16 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     """
     template = template_path
     if not template:
-        template_key = data.get("template", "HDKOC")
+        template_key = (data.get("template") or "HDKOC").strip() or "HDKOC"
         drive_name = TEMPLATE_MAP.get(template_key, template_key)
-        try:
-            from google_drive_client import get_template_path
-            template = get_template_path(drive_name, fallback_path=TEMPLATE_HDKOC)
-        except Exception as e:
-            print(f"⚠️ Drive template fetch failed, using local: {e}")
-            template = TEMPLATE_HDKOC
-    
+        from google_drive_client import get_template_path
+        # Không fallback sang template local khi Drive lỗi: template local
+        # (Mau_hop_dong_KOC.docx) không có placeholder → sẽ ra hợp đồng trống.
+        # get_template_path đã tự retry + dùng cache; nếu vẫn lỗi thì raise
+        # để main.py đặt Status = Failed.
+        template = get_template_path(drive_name, fallback_path=TEMPLATE_HDKOC)
+        print(f"📄 Using template '{drive_name}' → {template}")
+
     if not os.path.exists(template):
         raise FileNotFoundError(f"Template not found: {template}")
     
@@ -588,6 +589,13 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     print(f"✅ Replaced {sum(counts.values())} placeholders: {found}")
     if not_found:
         print(f"⚠️ Placeholders not found in template: {not_found}")
+    if sum(counts.values()) == 0:
+        # Template không có placeholder nào → chắc chắn sai file, dừng lại
+        # thay vì tạo hợp đồng trống rồi báo Done.
+        raise RuntimeError(
+            f"Template '{os.path.basename(template)}' không chứa placeholder nào "
+            f"({{HO_TEN}}, {{DIA_CHI}}, ...). Kiểm tra lại file template trên Drive."
+        )
     
     # ═══════════════════════════════════════════════════════
     # INSERT CCCD IMAGES (by keyword search, not index)
