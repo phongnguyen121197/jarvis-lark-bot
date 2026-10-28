@@ -1065,7 +1065,8 @@ def _process_contract_sync(record_id: str, fields: dict, profile: dict = None):
     import time as _time
     import tempfile
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from lark_contract import update_record as lark_update_record, fetch_cccd_images
+    from lark_contract import update_record as lark_update_record, fetch_cccd_images, get_record
+    from contract_generator import backfill_fields_from_record
 
     if profile is None:
         profile = get_contract_profile("default")
@@ -1079,16 +1080,34 @@ def _process_contract_sync(record_id: str, fields: dict, profile: dict = None):
 
     try:
         ho_ten = fields.get("Họ và Tên Bên B", "")
-        contract_data = parse_lark_record_to_contract_data(fields)
-        id_koc = contract_data.get("id_koc", "N/A")
-        print(f"🔄 {tag} Start: {ho_ten} (ID: {id_koc}) base={app_token} table={table_id}")
+        print(f"🔄 {tag} Start: {ho_ten} base={app_token} table={table_id}")
         sys.stdout.flush()
 
-        # 0. Download CCCD images from Lark Base attachments
+        # 0a. Đọc record từ Lark 1 lần: bù cột thiếu trong body webhook + lấy ảnh CCCD
+        record = None
+        try:
+            record = get_record(app_token, table_id, record_id)
+            if record and "error" not in record:
+                filled = backfill_fields_from_record(fields, record.get("fields", {}))
+                if filled:
+                    print(f"🧩 {tag} Backfilled from Lark record: {filled}")
+            else:
+                record = None
+                print(f"⚠️ {tag} Could not read record for backfill, using webhook body only")
+        except Exception as rec_err:
+            record = None
+            print(f"⚠️ {tag} Record read skipped: {rec_err}")
+
+        contract_data = parse_lark_record_to_contract_data(fields)
+        id_koc = contract_data.get("id_koc", "N/A")
+        print(f"🔄 {tag} Data ready: {ho_ten} (ID: {id_koc}, template={contract_data.get('template')})")
+        sys.stdout.flush()
+
+        # 0b. Download CCCD images from Lark Base attachments
         try:
             tmp_dir = tempfile.mkdtemp(prefix="cccd_")
             cccd_paths = fetch_cccd_images(
-                app_token, table_id, record_id, tmp_dir
+                app_token, table_id, record_id, tmp_dir, record=record
             )
             contract_data.update(cccd_paths)
             if cccd_paths.get("cccd_truoc_path"):

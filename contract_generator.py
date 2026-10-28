@@ -670,6 +670,46 @@ def _plain_number_text(value) -> str:
     return text
 
 
+# Các cột bot cần để điền hợp đồng. Nếu Lark Automation không gửi cột nào
+# trong body webhook, bot tự đọc từ record để bù vào.
+CONTRACT_FIELD_NAMES = [
+    "ID KOC", "Template", "Họ và Tên Bên B", "Địa chỉ Bên B", "MST Bên B",
+    "SDT Bên B", "CCCD Bên B", "CCCD Ngày Cấp", "CCCD Nơi Cấp", "Gmail Bên B",
+    "STK bên B", "Ngân hàng",
+    "Chi phí", "Thành tiền", "Số lượng clip", "% thuế TNCN", "Thuế TNCN",
+    "Tổng giá trị sau thuế",
+    "Thương hiệu", "Ngày dự kiến air", "% Hoa hồng tự nhiên", "% Hoa hồng chạy ads",
+]
+
+
+def _is_blank(value) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def backfill_fields_from_record(fields: Dict, record_fields: Dict) -> List[str]:
+    """
+    Bù những cột bị thiếu/trống trong body webhook bằng giá trị đọc trực tiếp
+    từ record Lark (API trả về: text → str/list segment, link → dict,
+    số → số, ngày → ms timestamp, formula → số/str/list).
+    Sửa `fields` tại chỗ, trả về danh sách tên cột đã bù.
+    """
+    filled = []
+    if not record_fields:
+        return filled
+    for name in CONTRACT_FIELD_NAMES:
+        if not _is_blank(fields.get(name)):
+            continue
+        raw = record_fields.get(name)
+        if _is_blank(raw):
+            continue
+        value = raw if isinstance(raw, (int, float)) and not isinstance(raw, bool) else _plain_text(raw)
+        if _is_blank(value):
+            continue
+        fields[name] = value
+        filled.append(name)
+    return filled
+
+
 def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
     """Convert Lark Base record fields to contract_generator data format."""
     sdt = fields.get("SDT Bên B", "")

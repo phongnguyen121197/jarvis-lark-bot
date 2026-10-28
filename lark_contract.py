@@ -127,17 +127,19 @@ def download_attachment(file_token: str, save_path: str) -> bool:
         return False
 
 
-def fetch_cccd_images(app_token: str, table_id: str, record_id: str, tmp_dir: str) -> dict:
+def fetch_cccd_images(app_token: str, table_id: str, record_id: str, tmp_dir: str, record: dict = None) -> dict:
     """
     Fetch CCCD front/back images from a Lark Base record.
-    
+
+    record: record đã get_record() sẵn (tránh gọi API 2 lần); None → tự gọi.
     Returns dict with paths:
         {"cccd_truoc_path": "/path/to/front.jpg", "cccd_sau_path": "/path/to/back.jpg"}
     """
     result = {"cccd_truoc_path": "", "cccd_sau_path": ""}
-    
+
     try:
-        record = get_record(app_token, table_id, record_id)
+        if record is None:
+            record = get_record(app_token, table_id, record_id)
         if not record or "error" in record:
             return result
         
