@@ -15,6 +15,7 @@ Supported placeholders:
   {CCCD_NGAY_CAP}       - Ngày cấp CCCD
   {CCCD_NOI_CAP}        - Nơi cấp CCCD
   {STK}                 - Số tài khoản Bên B
+  {NGAN_HANG}           - Tên ngân hàng Bên B (cột "Ngân hàng")
   {ID_KOC}              - ID KOC (tên kênh)
   {THUONG_HIEU}         - Thương hiệu
   {NGAY_DU_KIEN_AIR}    - Ngày dự kiến air
@@ -512,7 +513,8 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     cccd_ngay_cap = _format_date_vn(data.get("cccd_ngay_cap", ""))
     cccd_noi_cap = data.get("cccd_noi_cap", "")
     stk = data.get("stk", "")
-    
+    ngan_hang = data.get("ngan_hang", "")
+
     thuong_hieu = data.get("thuong_hieu", "")
     ngay_du_kien_air = _format_date_field(data.get("ngay_du_kien_air", ""))
     hoa_hong_tu_nhien = _format_percent(data.get("hoa_hong_tu_nhien", ""))
@@ -560,6 +562,7 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
         "{CCCD_NGAY_CAP}": str(cccd_ngay_cap),
         "{CCCD_NOI_CAP}": str(cccd_noi_cap),
         "{STK}": str(stk),
+        "{NGAN_HANG}": str(ngan_hang),
         "{ID_KOC}": str(id_koc),
         "{THUONG_HIEU}": str(thuong_hieu),
         "{NGAY_DU_KIEN_AIR}": str(ngay_du_kien_air),
@@ -630,6 +633,22 @@ def generate_contract(data: Dict, template_path: str = None, output_path: str = 
     return output
 
 
+def _plain_text(value) -> str:
+    """
+    Chuẩn hoá giá trị field Lark về chuỗi: single select → str,
+    text/link dạng dict → .text, list (multi select / rich text) → nối bằng ", ".
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return str(value.get("text", value.get("value", value.get("name", "")))).strip()
+    if isinstance(value, (list, tuple)):
+        return ", ".join(p for p in (_plain_text(v) for v in value) if p)
+    return str(value).strip()
+
+
 def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
     """Convert Lark Base record fields to contract_generator data format."""
     sdt = fields.get("SDT Bên B", "")
@@ -647,6 +666,7 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "cccd_noi_cap": fields.get("CCCD Nơi Cấp", ""),
         "gmail": fields.get("Gmail Bên B", ""),
         "stk": fields.get("STK bên B", ""),
+        "ngan_hang": _plain_text(fields.get("Ngân hàng", fields.get("Ngân Hàng", ""))),
         # Payment
         "chi_phi": fields.get("Chi phí", ""),
         "thanh_tien": fields.get("Thành tiền", fields.get("Thành Tiền", fields.get("Thành Tiên", ""))),

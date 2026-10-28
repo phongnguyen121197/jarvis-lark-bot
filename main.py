@@ -83,6 +83,53 @@ GROUP_CHATS = {
 CONTRACT_BASE_APP_TOKEN = os.getenv("CONTRACT_BASE_APP_TOKEN", "XfHGbvXrRaK1zcsTZ1zl5QR3ghf")
 CONTRACT_BASE_TABLE_ID = os.getenv("CONTRACT_BASE_TABLE_ID", "tblndkVZ6Dao620Y")
 
+# --- Contract PROFILES: mỗi profile = 1 Lark Base/Table riêng -------------
+# "default" = Base KOC cũ (giữ nguyên env CONTRACT_BASE_*).
+# Profile khác gọi qua URL: /webhook/contract/{profile}
+# Có thể thêm/ghi đè profile bằng env CONTRACT_PROFILES_JSON, ví dụ:
+#   {"cheng": {"app_token": "V89S...", "table_id": "tblMao..."}}
+# Các key tuỳ chọn trong 1 profile (nếu khác tên cột mặc định):
+#   status_field   (mặc định "Status")
+#   result_field   (mặc định "Kết quả")
+#   template_field (mặc định "Template")
+CONTRACT_PROFILES = {
+    "default": {
+        "app_token": CONTRACT_BASE_APP_TOKEN,
+        "table_id": CONTRACT_BASE_TABLE_ID,
+    },
+    # Base "chenglovehair" - hợp đồng KOC Cheng
+    "cheng": {
+        "app_token": os.getenv("CONTRACT_CHENG_APP_TOKEN", "V89SbotPpakF3DsJbyAljveXgcg"),
+        "table_id": os.getenv("CONTRACT_CHENG_TABLE_ID", "tblMaoRSTQHWBQQY"),
+    },
+}
+
+try:
+    _extra_profiles = json.loads(os.getenv("CONTRACT_PROFILES_JSON", "") or "{}")
+    for _name, _cfg in _extra_profiles.items():
+        if isinstance(_cfg, dict) and _cfg.get("app_token") and _cfg.get("table_id"):
+            CONTRACT_PROFILES[_name] = {**CONTRACT_PROFILES.get(_name, {}), **_cfg}
+        else:
+            print(f"⚠️ CONTRACT_PROFILES_JSON: profile '{_name}' thiếu app_token/table_id, bỏ qua")
+except Exception as _e:
+    print(f"⚠️ CONTRACT_PROFILES_JSON không parse được: {_e}")
+
+
+def get_contract_profile(name: str = None) -> dict:
+    """Trả về config profile hợp đồng. Raise KeyError nếu profile không tồn tại."""
+    key = (name or "default").strip().lower()
+    if key not in CONTRACT_PROFILES:
+        raise KeyError(f"Unknown contract profile '{key}'. Available: {sorted(CONTRACT_PROFILES)}")
+    cfg = CONTRACT_PROFILES[key]
+    return {
+        "name": key,
+        "app_token": cfg["app_token"],
+        "table_id": cfg["table_id"],
+        "status_field": cfg.get("status_field", "Status"),
+        "result_field": cfg.get("result_field", "Kết quả"),
+        "template_field": cfg.get("template_field", "Template"),
+    }
+
 _discovered_groups = {}
 
 def register_group(chat_id: str, chat_type: str, group_name: str = None):
@@ -938,59 +985,80 @@ async def send_seeding_manual(
 @app.post("/webhook/contract")
 async def handle_contract_webhook(request: Request):
     """
-    Webhook nhận yêu cầu tạo hợp đồng KOC từ Lark Base Automation.
+    Webhook nhận yêu cầu tạo hợp đồng KOC từ Lark Base Automation (Base mặc định).
     Returns immediately, processes in background thread for reliability.
     """
+    return await _handle_contract_webhook(request, "default")
+
+
+@app.post("/webhook/contract/{profile}")
+async def handle_contract_webhook_profile(profile: str, request: Request):
+    """
+    Webhook tạo hợp đồng cho 1 Lark Base khác (theo profile).
+    Ví dụ: POST /webhook/contract/cheng
+    """
+    return await _handle_contract_webhook(request, profile)
+
+
+async def _handle_contract_webhook(request: Request, profile_name: str):
     try:
+        try:
+            profile = get_contract_profile(profile_name)
+        except KeyError as ke:
+            print(f"❌ Contract webhook: {ke}")
+            return {"success": False, "error": str(ke)}
+
         content_type = request.headers.get("content-type", "")
-        
+
         if "application/json" in content_type:
             body = await request.json()
         else:
             raw = await request.body()
             body = json.loads(raw.decode("utf-8"))
-        
-        print(f"📩 Contract webhook received: {json.dumps(body, ensure_ascii=False)[:500]}")
-        
+
+        print(f"📩 Contract webhook [{profile['name']}] received: {json.dumps(body, ensure_ascii=False)[:500]}")
+
         record_id = body.get("record_id", "")
         fields = body.get("fields", {})
-        
+
         if not fields and not record_id:
             fields = body
             record_id = body.get("record_id", body.get("Record ID", ""))
-        
+
         if not record_id:
             return {"success": False, "error": "Missing record_id"}
-        
+
         ho_ten = fields.get("Họ và Tên Bên B", "")
         if not ho_ten:
             return {"success": False, "error": "Missing required field: Họ và Tên Bên B"}
-        
+
         # === Fire-and-forget: process in background THREAD (sync, reliable) ===
         thread = threading.Thread(
             target=_process_contract_sync,
-            args=(record_id, fields),
+            args=(record_id, fields, profile),
             daemon=True,
         )
         thread.start()
-        print(f"🚀 Background thread started for: {ho_ten}")
-        
+        print(f"🚀 Background thread started for: {ho_ten} [{profile['name']}]")
+
         return {
             "success": True,
+            "profile": profile["name"],
             "record_id": record_id,
             "koc_name": ho_ten,
             "status": "processing",
         }
-    
+
     except Exception as e:
         print(f"❌ Contract webhook error: {e}")
         return {"success": False, "error": str(e)}
 
 
-def _process_contract_sync(record_id: str, fields: dict):
+def _process_contract_sync(record_id: str, fields: dict, profile: dict = None):
     """
     Background thread: generate contract → upload Drive → update Lark.
     Tối ưu: set permission + update Lark chạy SONG SONG.
+    profile: dict từ get_contract_profile() - quyết định Base/Table nào được đọc/ghi.
     """
     import sys
     import traceback
@@ -999,20 +1067,28 @@ def _process_contract_sync(record_id: str, fields: dict):
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from lark_contract import update_record as lark_update_record, fetch_cccd_images
 
+    if profile is None:
+        profile = get_contract_profile("default")
+    app_token = profile["app_token"]
+    table_id = profile["table_id"]
+    status_field = profile["status_field"]
+    result_field = profile["result_field"]
+    tag = f"[BG:{profile['name']}]"
+
     t0 = _time.time()
 
     try:
         ho_ten = fields.get("Họ và Tên Bên B", "")
         contract_data = parse_lark_record_to_contract_data(fields)
         id_koc = contract_data.get("id_koc", "N/A")
-        print(f"🔄 [BG] Start: {ho_ten} (ID: {id_koc})")
+        print(f"🔄 {tag} Start: {ho_ten} (ID: {id_koc}) base={app_token} table={table_id}")
         sys.stdout.flush()
 
         # 0. Download CCCD images from Lark Base attachments
         try:
             tmp_dir = tempfile.mkdtemp(prefix="cccd_")
             cccd_paths = fetch_cccd_images(
-                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, tmp_dir
+                app_token, table_id, record_id, tmp_dir
             )
             contract_data.update(cccd_paths)
             if cccd_paths.get("cccd_truoc_path"):
@@ -1033,8 +1109,8 @@ def _process_contract_sync(record_id: str, fields: dict):
         # 2. Upload to Google Drive (~2-3s - bottleneck chính)
         drive_client = get_drive_client()
         if not drive_client:
-            print("❌ [BG] Google Drive not configured")
-            lark_update_record(CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, {"Status": "Failed"})
+            print(f"❌ {tag} Google Drive not configured")
+            lark_update_record(app_token, table_id, record_id, {status_field: "Failed"})
             return
 
         today = datetime.now().strftime("%d-%m-%Y")
@@ -1064,15 +1140,15 @@ def _process_contract_sync(record_id: str, fields: dict):
         # 3+4. Set permission + Update Lark SONG SONG (~1s thay vì ~2s)
         t3 = _time.time()
         update_fields = {
-            "Status": "Done",
-            "Kết quả": {"text": gdoc_link, "link": gdoc_link},
+            status_field: "Done",
+            result_field: {"text": gdoc_link, "link": gdoc_link},
         }
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             f_perm = pool.submit(drive_client.set_anyone_edit, file_id)
             f_lark = pool.submit(
                 lark_update_record,
-                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, update_fields,
+                app_token, table_id, record_id, update_fields,
             )
             # Wait for both
             for f in as_completed([f_perm, f_lark]):
@@ -1091,53 +1167,74 @@ def _process_contract_sync(record_id: str, fields: dict):
             pass
 
         total = _time.time() - t0
-        print(f"✅ [BG] Done: {ho_ten} → {total:.1f}s total")
+        print(f"✅ {tag} Done: {ho_ten} → {total:.1f}s total")
         sys.stdout.flush()
 
     except Exception as e:
-        print(f"❌ [BG] Error: {e}")
+        print(f"❌ {tag} Error: {e}")
         print(traceback.format_exc())
         sys.stdout.flush()
         try:
             from lark_contract import update_record as lark_update_record_err
             lark_update_record_err(
-                CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, record_id, {"Status": "Failed"}
+                app_token, table_id, record_id, {status_field: "Failed"}
             )
         except:
             pass
 
 
+@app.get("/test/contract-profiles")
+async def test_contract_profiles():
+    """Liệt kê các contract profile đang được nạp (không lộ secret)."""
+    return {
+        "profiles": {
+            name: get_contract_profile(name) for name in sorted(CONTRACT_PROFILES)
+        }
+    }
+
+
 @app.post("/test/lark-update/{record_id}")
-async def test_lark_update(record_id: str):
-    """Test Lark Base update only - dùng lark_contract.py (sync)."""
+async def test_lark_update(record_id: str, profile: str = "default"):
+    """Test Lark Base update only - dùng lark_contract.py (sync). ?profile=cheng để test Base khác."""
     from lark_contract import update_record as lark_update_record
-    
-    print(f"🧪 Testing Lark update: app={CONTRACT_BASE_APP_TOKEN}, table={CONTRACT_BASE_TABLE_ID}, record={record_id}")
-    
+
+    try:
+        p = get_contract_profile(profile)
+    except KeyError as ke:
+        return {"success": False, "error": str(ke)}
+    app_token, table_id = p["app_token"], p["table_id"]
+
+    print(f"🧪 Testing Lark update [{p['name']}]: app={app_token}, table={table_id}, record={record_id}")
+
     try:
         result = lark_update_record(
-            CONTRACT_BASE_APP_TOKEN,
-            CONTRACT_BASE_TABLE_ID,
+            app_token,
+            table_id,
             record_id,
-            {"Status": "Test"}
+            {p["status_field"]: "Test"}
         )
         print(f"🧪 Result: {result}")
-        return {"success": True, "result": result, "app_token": CONTRACT_BASE_APP_TOKEN, "table_id": CONTRACT_BASE_TABLE_ID}
+        return {"success": True, "profile": p["name"], "result": result, "app_token": app_token, "table_id": table_id}
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        return {"success": False, "error": str(e), "app_token": CONTRACT_BASE_APP_TOKEN, "table_id": CONTRACT_BASE_TABLE_ID}
+        return {"success": False, "profile": p["name"], "error": str(e), "app_token": app_token, "table_id": table_id}
 
 
 @app.get("/test/lark-debug")
-async def test_lark_debug():
-    """Debug: list tables in base + try read record to find permission issue."""
+async def test_lark_debug(profile: str = "default"):
+    """Debug: list tables in base + try read record to find permission issue. ?profile=cheng để debug Base khác."""
     from lark_contract import get_token, headers as get_headers_fn
     import requests as req
 
     results = {}
-    app_token = CONTRACT_BASE_APP_TOKEN
-    table_id = CONTRACT_BASE_TABLE_ID
+    try:
+        p = get_contract_profile(profile)
+    except KeyError as ke:
+        return {"success": False, "error": str(ke)}
+    app_token = p["app_token"]
+    table_id = p["table_id"]
+    results["profile"] = p["name"]
 
     # 1. Auth test
     try:
@@ -1167,15 +1264,21 @@ async def test_lark_debug():
     except Exception as e:
         results["list_tables"] = {"status": f"ERROR: {e}"}
 
-    # 3. Try read record
+    # 3. Try read first record of the table
     try:
         resp = req.get(
-            f"https://open.larksuite.com/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/recvasVSSlBTvx",
-            headers=h, timeout=15
+            f"https://open.larksuite.com/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+            headers=h, params={"page_size": 1}, timeout=15
         )
         data = resp.json()
         if data.get("code") == 0:
-            results["read_record"] = {"status": "OK", "fields": list(data.get("data", {}).get("record", {}).get("fields", {}).keys())}
+            items = data.get("data", {}).get("items", [])
+            first = items[0] if items else {}
+            results["read_record"] = {
+                "status": "OK",
+                "record_id": first.get("record_id"),
+                "fields": list(first.get("fields", {}).keys()),
+            }
         else:
             results["read_record"] = {"status": "FAILED", "code": data.get("code"), "msg": data.get("msg")}
     except Exception as e:
@@ -1251,21 +1354,38 @@ async def test_contract_generate():
 async def handle_sync_templates(request: Request):
     """
     Webhook quét Drive folder "Templates" → tự thêm option mới vào
-    cột "Template" (single_select) trong Lark Base.
-    
+    cột "Template" (single_select) trong Lark Base (Base mặc định).
+
     Trigger: Button click trong Lark Automation.
     """
+    return await _handle_sync_templates(request, "default")
+
+
+@app.get("/webhook/sync-templates/{profile}")
+@app.post("/webhook/sync-templates/{profile}")
+async def handle_sync_templates_profile(profile: str, request: Request):
+    """Sync template cho 1 Lark Base khác. Ví dụ: /webhook/sync-templates/cheng"""
+    return await _handle_sync_templates(request, profile)
+
+
+async def _handle_sync_templates(request: Request, profile_name: str):
     try:
+        try:
+            profile = get_contract_profile(profile_name)
+        except KeyError as ke:
+            print(f"❌ Sync templates: {ke}")
+            return {"success": False, "error": str(ke)}
+
         wait = request.query_params.get("wait", "").lower() in {"1", "true", "yes"}
-        print(f"🔄 Sync templates webhook received (wait={wait})")
+        print(f"🔄 Sync templates webhook [{profile['name']}] received (wait={wait})")
 
         if wait:
-            return _sync_templates_sync()
+            return _sync_templates_sync(profile)
 
-        thread = threading.Thread(target=_sync_templates_sync, daemon=True)
+        thread = threading.Thread(target=_sync_templates_sync, args=(profile,), daemon=True)
         thread.start()
 
-        return {"success": True, "status": "syncing", "hint": "Add ?wait=true to return sync details"}
+        return {"success": True, "profile": profile["name"], "status": "syncing", "hint": "Add ?wait=true to return sync details"}
 
     except Exception as e:
         print(f"❌ Sync templates error: {e}")
@@ -1273,16 +1393,26 @@ async def handle_sync_templates(request: Request):
 
 
 @app.get("/test/sync-templates")
-async def test_sync_templates():
-    """Debug endpoint: run Drive → Lark Template sync and return full result."""
-    return _sync_templates_sync()
+async def test_sync_templates(profile: str = "default"):
+    """Debug endpoint: run Drive → Lark Template sync and return full result. ?profile=cheng cho Base khác."""
+    try:
+        p = get_contract_profile(profile)
+    except KeyError as ke:
+        return {"success": False, "error": str(ke)}
+    return _sync_templates_sync(p)
 
-def _sync_templates_sync():
+def _sync_templates_sync(profile: dict = None):
     """Background: scan Drive template folder → update Lark field options."""
     import sys
     import time as _time
     from lark_contract import get_field_options, add_field_options
     from google_drive_client import get_drive_client, GOOGLE_DRIVE_TEMPLATE_FOLDER_ID
+
+    if profile is None:
+        profile = get_contract_profile("default")
+    app_token = profile["app_token"]
+    table_id = profile["table_id"]
+    template_field = profile["template_field"]
 
     t0 = _time.time()
 
@@ -1332,13 +1462,14 @@ def _sync_templates_sync():
 
         # 2. Get current Lark field options
         field_info = get_field_options(
-            CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID, "Template"
+            app_token, table_id, template_field
         )
         if not field_info:
-            print("❌ [Sync] Field 'Template' not found in Lark Base")
+            print(f"❌ [Sync:{profile['name']}] Field '{template_field}' not found in Lark Base")
             return {
                 "success": False,
-                "error": "Field 'Template' not found in Lark Base",
+                "profile": profile["name"],
+                "error": f"Field '{template_field}' not found in Lark Base",
                 "folder_id": folder_id,
                 "drive_templates": sorted(drive_names),
             }
@@ -1367,9 +1498,9 @@ def _sync_templates_sync():
 
         # 4. Add new options
         result = add_field_options(
-            CONTRACT_BASE_APP_TOKEN, CONTRACT_BASE_TABLE_ID,
+            app_token, table_id,
             field_id, existing_property_options, sorted(new_names),
-            field_name="Template", field_type=field_type
+            field_name=template_field, field_type=field_type
         )
 
         if "error" not in result:
