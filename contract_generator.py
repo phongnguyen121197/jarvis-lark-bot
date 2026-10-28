@@ -649,6 +649,19 @@ def _plain_text(value) -> str:
     return str(value).strip()
 
 
+def _plain_number_text(value) -> str:
+    """
+    Như _plain_text nhưng dành cho số định danh (STK, CCCD...) lấy từ cột
+    công thức/số: 123456.0 → "123456", giữ nguyên nếu không phải số.
+    """
+    text = _plain_text(value)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if re.fullmatch(r"\d+\.0+", text):
+        return text.split(".")[0]
+    return text
+
+
 def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
     """Convert Lark Base record fields to contract_generator data format."""
     sdt = fields.get("SDT Bên B", "")
@@ -664,8 +677,10 @@ def parse_lark_record_to_contract_data(fields: Dict) -> Dict:
         "cccd": fields.get("CCCD Bên B", ""),
         "cccd_ngay_cap": fields.get("CCCD Ngày Cấp", ""),
         "cccd_noi_cap": fields.get("CCCD Nơi Cấp", ""),
-        "gmail": fields.get("Gmail Bên B", ""),
-        "stk": fields.get("STK bên B", ""),
+        # Gmail có thể là cột Link (dict {text, link}) → lấy text
+        "gmail": _plain_text(fields.get("Gmail Bên B", "")),
+        # STK có thể là cột công thức → số dạng 123456.0 → bỏ ".0"
+        "stk": _plain_number_text(fields.get("STK bên B", "")),
         "ngan_hang": _plain_text(fields.get("Ngân hàng", fields.get("Ngân Hàng", ""))),
         # Payment
         "chi_phi": fields.get("Chi phí", ""),
