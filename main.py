@@ -714,6 +714,15 @@ async def startup_event():
     )
     print(f"📊 Daily Booking Report scheduled: Everyday at 9:00 AM (until 2026-02-14)")
         
+    # Job 4: Nhanh.vn booking tracker - quét đơn cập nhật 30 phút gần nhất, mỗi 10 phút
+    scheduler.add_job(
+        _nhanh_poll_job,
+        "interval", minutes=10,
+        id="nhanh_poll_orders",
+        replace_existing=True,
+    )
+    print("📦 Nhanh.vn order poll scheduled: every 10 minutes")
+
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at 9:00 & 17:00 {TIMEZONE}")
     
@@ -1581,6 +1590,155 @@ def _sync_templates_sync(profile: dict = None):
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
     
     sys.stdout.flush()
+
+
+# ╔════════════════════════════════════════════════════════════════╗
+# ║          NHANH.VN: OAUTH + WEBHOOK + BOOKING TRACKER           ║
+# ╚════════════════════════════════════════════════════════════════╝
+import nhanh_client as nhanh
+import nhanh_tracker
+from fastapi.responses import RedirectResponse, HTMLResponse
+
+
+def _nhanh_poll_job():
+    """Job scheduler: quét đơn cập nhật 30 phút gần nhất (chạy trong thread để không chặn event loop)."""
+    if not nhanh.has_token():
+        return
+    def _run():
+        try:
+            nhanh_tracker.poll_recent_orders(30)
+        except Exception as e:
+            print(f"⚠️ [Nhanh] Poll job error: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@app.get("/nhanh/oauth/start")
+async def nhanh_oauth_start():
+    """Mở link này bằng tài khoản Giám đốc Nhanh.vn để uỷ quyền cho app Jarvis."""
+    if not nhanh.is_configured():
+        return {"success": False, "error": "NHANH_APP_ID / NHANH_SECRET_KEY chưa cấu hình trên Railway"}
+    return RedirectResponse(nhanh.oauth_url())
+
+
+@app.get("/nhanh/oauth/callback")
+async def nhanh_oauth_callback(request: Request):
+    """Nhanh.vn redirect về đây với ?accessCode=... → đổi lấy accessToken."""
+    code = request.query_params.get("accessCode", "")
+    if not code:
+        return HTMLResponse("<h3>Thiếu accessCode trên URL</h3>", status_code=400)
+    try:
+        d = nhanh.exchange_access_code(code)
+    except Exception as e:
+        return HTMLResponse(f"<h3>Đổi token thất bại</h3><pre>{str(e)}</pre>", status_code=400)
+
+    info = nhanh.token_info()
+    # In token ra log để copy vào Railway (container không giữ file sau redeploy)
+    print(f"🔑 [Nhanh] NHANH_ACCESS_TOKEN={d.get('accessToken')}")
+    print(f"🔑 [Nhanh] NHANH_BUSINESS_ID={d.get('businessId')}  NHANH_TOKEN_EXPIRED_AT={d.get('expiredAt')}")
+    html = f"""
+    <html><body style="font-family:sans-serif;max-width:720px;margin:40px auto">
+    <h2>✅ Jarvis đã kết nối Nhanh.vn</h2>
+    <p>Business ID: <b>{d.get('businessId')}</b> · Token hết hạn: <b>{info['expired_at_text']}</b></p>
+    <p>Quyền được cấp: {', '.join(d.get('permissions') or []) or '(trống)'}</p>
+    <p><b>Việc cần làm ngay:</b> thêm 3 biến sau vào Railway → Variables rồi redeploy,
+    để token không mất khi container khởi động lại:</p>
+    <pre style="background:#f4f4f4;padding:12px;white-space:pre-wrap">NHANH_ACCESS_TOKEN={d.get('accessToken')}
+NHANH_BUSINESS_ID={d.get('businessId')}
+NHANH_TOKEN_EXPIRED_AT={d.get('expiredAt')}</pre>
+    <p>Token đang được giữ trong bộ nhớ, bot dùng được ngay. Kiểm tra: <a href="/test/nhanh-status">/test/nhanh-status</a></p>
+    </body></html>"""
+    return HTMLResponse(html)
+
+
+@app.post("/webhook/nhanh")
+async def nhanh_webhook(request: Request):
+    """
+    Nhận webhook v3 từ Nhanh.vn. Trả 200 ngay, xử lý trong thread.
+    Xác thực: header Authorization == NHANH_WEBHOOK_VERIFY_TOKEN.
+    """
+    raw = await request.body()
+    try:
+        payload = json.loads(raw.decode("utf-8")) if raw else {}
+    except Exception:
+        payload = {}
+
+    expected = nhanh.NHANH_WEBHOOK_VERIFY_TOKEN
+    got = request.headers.get("authorization", "") or request.headers.get("Authorization", "")
+    if not got and isinstance(payload, dict):
+        got = str(payload.get("verifyToken") or payload.get("token") or "")
+    if expected and got.strip() != expected.strip():
+        print(f"⛔ [Nhanh] Webhook rejected: bad verify token (got '{got[:6]}...')")
+        return JSONResponse({"success": False, "error": "invalid verify token"}, status_code=401)
+
+    event = payload.get("event", "") if isinstance(payload, dict) else ""
+    print(f"📩 [Nhanh] Webhook event={event} business={payload.get('businessId') if isinstance(payload, dict) else ''}")
+    if event in ("webhooksEnabled", "appUninstalled", ""):
+        return {"success": True, "event": event}
+
+    def _run():
+        try:
+            r = nhanh_tracker.handle_webhook_event(payload)
+            print(f"✅ [Nhanh] Webhook {event} → {r}")
+        except Exception as e:
+            import traceback
+            print(f"❌ [Nhanh] Webhook {event} error: {e}")
+            traceback.print_exc()
+    threading.Thread(target=_run, daemon=True).start()
+    return {"success": True, "event": event, "status": "processing"}
+
+
+@app.get("/test/nhanh-status")
+async def nhanh_status(check: bool = False):
+    """Tình trạng kết nối Nhanh.vn + bảng booking. ?check=true để gọi Nhanh kiểm tra token thật."""
+    out = {"token": nhanh.token_info(), "booking_table": {
+        "app_token": nhanh_tracker.BOOKING_APP_TOKEN,
+        "table_id": nhanh_tracker.BOOKING_TABLE_ID,
+        "phone_fields": nhanh_tracker.PHONE_FIELDS,
+    }, "webhook_verify_token_set": bool(nhanh.NHANH_WEBHOOK_VERIFY_TOKEN)}
+    if check and nhanh.has_token():
+        try:
+            out["check_token"] = nhanh.check_token()
+        except Exception as e:
+            out["check_token"] = {"error": str(e)}
+        try:
+            out["booking_fields"] = nhanh_tracker.ensure_tracking_fields(force=True)
+            idx = nhanh_tracker.build_index(force=True)
+            out["booking_index"] = {"records": idx["count"], "phones": len(idx["by_phone"]), "linked_orders": len(idx["by_order"])}
+        except Exception as e:
+            out["booking_index"] = {"error": str(e)}
+    return out
+
+
+@app.get("/nhanh/sync")
+@app.post("/nhanh/sync")
+async def nhanh_sync(minutes: int = 60):
+    """Quét thủ công các đơn Nhanh cập nhật trong N phút (tối đa 31 ngày) và ghi về Lark."""
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token. Mở /nhanh/oauth/start để uỷ quyền."}
+    loop = asyncio.get_event_loop()
+    try:
+        stats = await loop.run_in_executor(None, nhanh_tracker.poll_recent_orders, minutes)
+        return {"success": True, "minutes": minutes, **stats}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/nhanh/order/{order_id}")
+async def nhanh_order_lookup(order_id: int):
+    """Debug: xem 1 đơn Nhanh đã chuẩn hoá và record booking khớp (không ghi gì)."""
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+    def _run():
+        for raw in nhanh.list_orders_by_ids([order_id]):
+            order = nhanh.normalize_order(raw)
+            return {"success": True, "order": order, "match": nhanh_tracker.find_booking_for_order(order)}
+        return {"success": False, "error": "order not found"}
+    try:
+        return await loop.run_in_executor(None, _run)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":

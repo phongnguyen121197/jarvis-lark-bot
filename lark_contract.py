@@ -177,6 +177,43 @@ def list_fields(app_token: str, table_id: str) -> list:
     return data.get("data", {}).get("items", [])
 
 
+def list_records(app_token: str, table_id: str, page_size: int = 500, max_pages: int = 40) -> list:
+    """Liệt kê toàn bộ record của 1 bảng (phân trang bằng page_token)."""
+    url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/records"
+    records, page_token = [], ""
+    for _ in range(max_pages):
+        params = {"page_size": page_size}
+        if page_token:
+            params["page_token"] = page_token
+        resp = requests.get(url, headers=headers(), params=params, timeout=30)
+        data = resp.json()
+        if data.get("code") != 0:
+            raise Exception(f"Lark list_records error: code={data.get('code')} msg={data.get('msg')}")
+        d = data.get("data", {})
+        records.extend(d.get("items", []) or [])
+        if not d.get("has_more"):
+            break
+        page_token = d.get("page_token", "")
+        if not page_token:
+            break
+    return records
+
+
+def create_field(app_token: str, table_id: str, field_name: str, field_type: int = 1, property: dict = None) -> dict:
+    """
+    Tạo cột mới. field_type: 1 text, 2 number, 3 single select, 5 datetime, 15 url.
+    """
+    url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    body = {"field_name": field_name, "type": field_type}
+    if property:
+        body["property"] = property
+    resp = requests.post(url, headers=headers(), json=body, timeout=15)
+    data = resp.json()
+    if data.get("code") != 0:
+        raise Exception(f"Lark create_field '{field_name}' error: code={data.get('code')} msg={data.get('msg')}")
+    return data.get("data", {}).get("field", {})
+
+
 _option_map_cache: dict = {}   # (app_token, table_id) → {"ts": float, "map": {opt_id: name}}
 OPTION_MAP_TTL_SEC = 600
 
