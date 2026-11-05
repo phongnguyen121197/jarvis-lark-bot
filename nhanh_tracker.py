@@ -277,20 +277,48 @@ def _record_deal_ts(fields: dict) -> Optional[int]:
     return None
 
 
-def _pick_order_for_booking(orders: List[dict], deal_ts: Optional[int]) -> Optional[dict]:
+DEAL_GRACE_SEC = 3 * 86400          # đơn được tạo sớm hơn Ngày deal tối đa 3 ngày
+NO_DEAL_WINDOW_SEC = 31 * 86400     # không có Ngày deal: chỉ nhận đơn trong 31 ngày gần nhất
+F_SHIPPED_FLAG = "Đã đi đơn"        # checkbox sale tích sau khi lên đơn Nhanh
+
+
+def _is_checked(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("true", "1", "yes", "x", "✓")
+
+
+def _pick_order_for_booking(orders: List[dict], deal_ts: Optional[int], shipped_flag: bool = False) -> Optional[dict]:
     """
-    Chọn đơn đại diện cho booking trong danh sách đơn (mới nhất trước) của cùng SĐT:
-    ưu tiên đơn giao hàng (type 1) tạo sau ngày deal - 7 ngày; không có thì đơn mới nhất.
+    Chọn đơn đại diện cho booking trong danh sách đơn (mới nhất trước) của cùng SĐT.
+    KHÔNG bao giờ gắn đơn cũ (mua lẻ trước đó):
+      - có Ngày deal  → chỉ nhận đơn tạo từ (Ngày deal - 3 ngày) trở đi, lấy đơn sớm nhất sau mốc đó
+      - không có Ngày deal → chỉ khi sale đã tích "Đã đi đơn", nhận đơn trong 31 ngày gần nhất (mới nhất)
     """
     cands = [nc.normalize_order(r) for r in orders]
     cands = [o for o in cands if _is_booking_order(o) and o.get("order_id")]
     if not cands:
         return None
     if deal_ts:
-        after = [o for o in cands if (o.get("created_at") or 0) >= deal_ts - 7 * 86400]
-        if after:
-            return after[0]
-    return cands[0]
+        after = [o for o in cands if (o.get("created_at") or 0) >= deal_ts - DEAL_GRACE_SEC]
+        if not after:
+            return None
+        # đơn đầu tiên được lên sau khi deal = đơn booking
+        return sorted(after, key=lambda o: o.get("created_at") or 0)[0]
+    if shipped_flag:
+        recent = [o for o in cands if (o.get("created_at") or 0) >= time.time() - NO_DEAL_WINDOW_SEC]
+        return recent[0] if recent else None
+    return None
+
+
+def _clear_order_on_record(record_id: str, koc: str = "") -> None:
+    update_record(BOOKING_APP_TOKEN, BOOKING_TABLE_ID, record_id, {
+        F_ORDER_ID: "", F_STATUS: "", F_CARRIER_CODE: "", F_CARRIER: "",
+        F_UPDATED: int(time.time() * 1000),
+    })
+    print(f"🧹 [Nhanh] Cleared wrong/old link on booking {koc or record_id}")
 
 
 def _write_order_to_record(record_id: str, order: dict, source: str, koc: str = "") -> dict:
@@ -343,11 +371,20 @@ def link_bookings_by_phone(only_unlinked: bool = True, limit: int = 200) -> dict
                 if p not in seen_phone_cache:
                     seen_phone_cache[p] = nc.list_orders_by_phone(p)
                 orders.extend(seen_phone_cache[p])
-            order = _pick_order_for_booking(orders, _record_deal_ts(fields))
+            order = _pick_order_for_booking(orders, _record_deal_ts(fields), _is_checked(fields.get(F_SHIPPED_FLAG)))
             if not order:
                 stats["no_order"] += 1
-                stats["details"].append({"koc": koc, "phones": phones, "result": "no_order"})
+                if current_oid and not only_unlinked:
+                    # đang gắn 1 đơn không còn hợp lệ (vd đơn cũ) → xoá
+                    _clear_order_on_record(rid, koc)
+                    _last_written.pop(current_oid, None)
+                    stats["details"].append({"koc": koc, "phones": phones, "result": "cleared", "old_order_id": current_oid})
+                else:
+                    stats["details"].append({"koc": koc, "phones": phones, "result": "no_order",
+                                             "orders_of_phone": len(orders)})
                 continue
+            if current_oid and current_oid != order["order_id"]:
+                _last_written.pop(current_oid, None)
             r = _write_order_to_record(rid, order, "link", koc)
             stats["linked"] += 1
             stats["details"].append({**r, "orders_found": len(orders), "result": "linked"})
