@@ -1600,6 +1600,20 @@ import nhanh_tracker
 from fastapi.responses import RedirectResponse, HTMLResponse
 
 
+def _fmt_permissions(perms) -> str:
+    """permissions từ Nhanh có thể là chuỗi JSON, dict hoặc list → chuỗi gọn."""
+    try:
+        if isinstance(perms, str):
+            perms = json.loads(perms)
+    except Exception:
+        return str(perms)
+    if isinstance(perms, dict):
+        return "; ".join(f"{k}: {', '.join(map(str, v))}" for k, v in perms.items())
+    if isinstance(perms, (list, tuple)):
+        return ", ".join(map(str, perms))
+    return str(perms) if perms else "(trống)"
+
+
 def _nhanh_poll_job():
     """Job scheduler: quét đơn cập nhật 30 phút gần nhất (chạy trong thread để không chặn event loop)."""
     if not nhanh.has_token():
@@ -1649,7 +1663,7 @@ async def nhanh_oauth_callback(request: Request):
     <html><body style="font-family:sans-serif;max-width:720px;margin:40px auto">
     <h2>✅ Jarvis đã kết nối Nhanh.vn</h2>
     <p>Business ID: <b>{d.get('businessId')}</b> · Token hết hạn: <b>{info['expired_at_text']}</b></p>
-    <p>Quyền được cấp: {', '.join(d.get('permissions') or []) or '(trống)'}</p>
+    <p>Quyền được cấp: <code>{_fmt_permissions(d.get('permissions'))}</code></p>
     <p><b>Việc cần làm ngay:</b> thêm 3 biến sau vào Railway → Variables rồi redeploy,
     để token không mất khi container khởi động lại:</p>
     <pre style="background:#f4f4f4;padding:12px;white-space:pre-wrap">NHANH_ACCESS_TOKEN={d.get('accessToken')}
@@ -1707,7 +1721,9 @@ async def nhanh_status(check: bool = False):
     }, "webhook_verify_token_set": bool(nhanh.NHANH_WEBHOOK_VERIFY_TOKEN)}
     if check and nhanh.has_token():
         try:
-            out["check_token"] = nhanh.check_token()
+            ct = dict(nhanh.check_token())
+            ct.pop("accessToken", None)
+            out["check_token"] = ct
         except Exception as e:
             out["check_token"] = {"error": str(e)}
         try:
@@ -1729,6 +1745,47 @@ async def nhanh_sync(minutes: int = 60):
     try:
         stats = await loop.run_in_executor(None, nhanh_tracker.poll_recent_orders, minutes)
         return {"success": True, "minutes": minutes, **stats}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/nhanh/debug-orders")
+async def nhanh_debug_orders(minutes: int = 1440, limit: int = 3, raw: bool = True):
+    """Debug: cấu trúc thật của N đơn Nhanh cập nhật gần đây (raw + normalized), SĐT che 4 số giữa."""
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+
+    def _mask(v):
+        s_ = str(v or "")
+        return s_[:3] + "****" + s_[-3:] if len(s_) >= 8 else s_
+
+    def _run():
+        out = []
+        since = int(time.time()) - max(1, min(int(minutes), 31 * 24 * 60)) * 60
+        for r in nhanh.list_orders_updated_since(since):
+            n = nhanh.normalize_order(r)
+            n["mobile"] = _mask(n.get("mobile"))
+            item = {"normalized": n, "top_level_keys": sorted(r.keys()) if isinstance(r, dict) else type(r).__name__}
+            if raw:
+                rr = json.loads(json.dumps(r))
+                for sect in ("shippingAddress", "customer"):
+                    if isinstance(rr.get(sect), dict):
+                        for k in ("mobile", "phone", "email"):
+                            if rr[sect].get(k):
+                                rr[sect][k] = _mask(rr[sect][k])
+                rr["products"] = (rr.get("products") or [])[:1]
+                item["raw"] = rr
+            out.append(item)
+            if len(out) >= max(1, min(int(limit), 10)):
+                break
+        idx = nhanh_tracker.build_index()
+        return {"success": True, "orders": out,
+                "booking_phones_sample": [_mask(p) for p in list(idx["by_phone"].keys())[:5]]}
+
+    try:
+        return await loop.run_in_executor(None, _run)
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
