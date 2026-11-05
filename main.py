@@ -714,14 +714,18 @@ async def startup_event():
     )
     print(f"📊 Daily Booking Report scheduled: Everyday at 9:00 AM (until 2026-02-14)")
         
-    # Job 4: Nhanh.vn booking tracker - quét đơn cập nhật 30 phút gần nhất, mỗi 10 phút
+    # Job 4: Nhanh.vn booking tracker - mặc định cách 2 ngày, 08:00 và 15:00 giờ VN
+    #   NHANH_SCHEDULE_DAY   cron day-of-month (mặc định "*/2")
+    #   NHANH_SCHEDULE_HOURS cron hour         (mặc định "8,15")
+    _nh_day = os.getenv("NHANH_SCHEDULE_DAY", "*/2") or "*/2"
+    _nh_hours = os.getenv("NHANH_SCHEDULE_HOURS", "8,15") or "8,15"
     scheduler.add_job(
         _nhanh_poll_job,
-        "interval", minutes=10,
+        CronTrigger(day=_nh_day, hour=_nh_hours, minute=0, timezone=TIMEZONE),
         id="nhanh_poll_orders",
         replace_existing=True,
     )
-    print("📦 Nhanh.vn order poll scheduled: every 10 minutes")
+    print(f"📦 Nhanh.vn booking tracker scheduled: day={_nh_day} hours={_nh_hours} ({TIMEZONE})")
 
     scheduler.start()
     print(f"🚀 Scheduler started. Daily reminder at 9:00 & 17:00 {TIMEZONE}")
@@ -1770,13 +1774,13 @@ async def nhanh_link(all: bool = False, limit: int = 200):
 
 @app.get("/nhanh/refresh")
 @app.post("/nhanh/refresh")
-async def nhanh_refresh():
-    """Làm mới trạng thái các đơn đã gắn (tra theo mã đơn)."""
+async def nhanh_refresh(include_final: bool = False):
+    """Làm mới trạng thái các đơn đã gắn (tra theo mã đơn). ?include_final=true để tra cả đơn đã kết thúc."""
     if not nhanh.has_token():
         return {"success": False, "error": "Chưa có access token"}
     loop = asyncio.get_event_loop()
     try:
-        stats = await loop.run_in_executor(None, nhanh_tracker.refresh_linked_orders)
+        stats = await loop.run_in_executor(None, nhanh_tracker.refresh_linked_orders, include_final)
         return {"success": True, **stats}
     except Exception as e:
         import traceback

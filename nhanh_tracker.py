@@ -49,9 +49,19 @@ TRACKING_FIELDS = {
 
 INDEX_TTL_SEC = 300
 
+# Trạng thái CUỐI: ghi 1 lần rồi không tra lại (đơn không đổi nữa)
+FINAL_STATUS_CODES = {60, 72, 63, 64, 58}   # Thành công, Đã chuyển hoàn, Khách hủy, Hệ thống hủy, Hãng VC hủy
+FINAL_STATUS_TEXTS = {nc.ORDER_STATUS[c] for c in FINAL_STATUS_CODES} | {"Đơn đã bị xóa"}
+
+
+def is_final_status(status_code=None, status_text: str = "") -> bool:
+    if status_code in FINAL_STATUS_CODES:
+        return True
+    return (status_text or "").strip() in FINAL_STATUS_TEXTS
+
 _lock = threading.Lock()
 _fields_ready = {"ts": 0.0, "ok": False}
-_index_cache = {"ts": 0.0, "by_phone": {}, "by_order": {}, "count": 0}
+_index_cache = {"ts": 0.0, "by_phone": {}, "by_order": {}, "by_order_status": {}, "count": 0}
 # Chống ghi trùng: order_id → (status_code, carrier_code)
 _last_written: Dict[str, Tuple] = {}
 
@@ -103,6 +113,7 @@ def build_index(force: bool = False) -> dict:
         records = list_records(BOOKING_APP_TOKEN, BOOKING_TABLE_ID)
         by_phone: Dict[str, List[dict]] = {}
         by_order: Dict[str, str] = {}
+        by_order_status: Dict[str, str] = {}
         for idx, rec in enumerate(records):
             fields = rec.get("fields", {}) or {}
             rid = rec.get("record_id", "")
@@ -116,13 +127,16 @@ def build_index(force: bool = False) -> dict:
                 "idx": idx,
                 "koc": _cell_text(fields.get("ID KOC")),
                 "order_id": _cell_text(fields.get(F_ORDER_ID)).strip(),
+                "status": _cell_text(fields.get(F_STATUS)).strip(),
                 "phones": phones,
             }
             for p in phones:
                 by_phone.setdefault(p, []).append(entry)
             if entry["order_id"]:
                 by_order[entry["order_id"]] = rid
-        _index_cache.update({"ts": time.time(), "by_phone": by_phone, "by_order": by_order, "count": len(records)})
+                by_order_status[entry["order_id"]] = entry["status"]
+        _index_cache.update({"ts": time.time(), "by_phone": by_phone, "by_order": by_order,
+                             "by_order_status": by_order_status, "count": len(records)})
         print(f"📇 [Nhanh] Booking index: {len(records)} records, {len(by_phone)} phones, {len(by_order)} linked orders")
         return _index_cache
 
@@ -177,6 +191,8 @@ def process_order(order: dict, source: str = "webhook") -> dict:
     key = (order.get("status_code"), order.get("carrier_code"))
     if _last_written.get(oid) == key:
         return {"order_id": oid, "result": "skipped", "reason": "unchanged"}
+    if is_final_status(status_text=build_index()["by_order_status"].get(oid, "")):
+        return {"order_id": oid, "result": "skipped", "reason": "already_final"}
 
     match = find_booking_for_order(order)
     if not match:
@@ -405,11 +421,21 @@ def link_bookings_by_phone(only_unlinked: bool = True, limit: int = 200) -> dict
     return stats
 
 
-def refresh_linked_orders() -> dict:
-    """Tra lại trạng thái các đơn đã gắn (theo mã đơn, 50 mã/lần) và cập nhật nếu đổi."""
+def refresh_linked_orders(include_final: bool = False) -> dict:
+    """
+    Tra lại trạng thái các đơn đã gắn (theo mã đơn, 50 mã/lần) và cập nhật nếu đổi.
+    Đơn đã ở trạng thái cuối (Thành công / Đã chuyển hoàn / Hủy) được bỏ qua,
+    trừ khi include_final=True.
+    """
     index = build_index(force=True)
     by_order = dict(index["by_order"])
-    stats = {"linked": len(by_order), "updated": 0, "unchanged": 0, "missing": 0, "errors": 0, "details": []}
+    statuses = index.get("by_order_status", {})
+    skipped_final = [oid for oid in by_order if is_final_status(status_text=statuses.get(oid, ""))]
+    if not include_final:
+        for oid in skipped_final:
+            by_order.pop(oid, None)
+    stats = {"linked": len(index["by_order"]), "to_check": len(by_order), "final_skipped": len(skipped_final),
+             "updated": 0, "unchanged": 0, "missing": 0, "errors": 0, "details": []}
     ids = [int(x) for x in by_order.keys() if str(x).isdigit()]
     for i in range(0, len(ids), 50):
         chunk = ids[i:i + 50]
@@ -431,13 +457,13 @@ def refresh_linked_orders() -> dict:
             stats["errors"] += 1
             stats["details"].append({"error": str(e)[:200]})
     print(f"🔄 [Nhanh] Refresh linked: {stats['updated']} updated, {stats['unchanged']} unchanged, "
-          f"{stats['missing']} missing, {stats['errors']} errors")
+          f"{stats['final_skipped']} final skipped, {stats['missing']} missing, {stats['errors']} errors")
     stats["details"] = stats["details"][:100]
     return stats
 
 
 def scheduled_cycle() -> dict:
-    """Chu kỳ 10 phút: gắn booking mới theo SĐT + làm mới đơn đã gắn."""
+    """Chu kỳ định kỳ (xem NHANH_SCHEDULE_* trong main.py): gắn booking mới theo SĐT + làm mới đơn chưa final."""
     out = {}
     try:
         out["link"] = link_bookings_by_phone(only_unlinked=True)
@@ -451,6 +477,6 @@ def scheduled_cycle() -> dict:
 
 
 def reset_caches():
-    _index_cache.update({"ts": 0.0, "by_phone": {}, "by_order": {}, "count": 0})
+    _index_cache.update({"ts": 0.0, "by_phone": {}, "by_order": {}, "by_order_status": {}, "count": 0})
     _fields_ready.update({"ts": 0.0, "ok": False})
     _last_written.clear()
