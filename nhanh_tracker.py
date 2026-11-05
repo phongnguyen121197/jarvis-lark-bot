@@ -277,6 +277,10 @@ def _record_deal_ts(fields: dict) -> Optional[int]:
     return None
 
 
+# Chế độ gắn đơn:
+#   any    (mặc định) ưu tiên đơn tạo sau Ngày deal - 3 ngày; không có thì lấy đơn MỚI NHẤT của SĐT (kể cả cũ)
+#   strict chỉ gắn đơn tạo sau Ngày deal - 3 ngày (không có Ngày deal → cần tích "Đã đi đơn", 31 ngày)
+LINK_MODE = (os.getenv("NHANH_LINK_MODE", "any") or "any").strip().lower()
 DEAL_GRACE_SEC = 3 * 86400          # đơn được tạo sớm hơn Ngày deal tối đa 3 ngày
 NO_DEAL_WINDOW_SEC = 31 * 86400     # không có Ngày deal: chỉ nhận đơn trong 31 ngày gần nhất
 F_SHIPPED_FLAG = "Đã đi đơn"        # checkbox sale tích sau khi lên đơn Nhanh
@@ -303,13 +307,16 @@ def _pick_order_for_booking(orders: List[dict], deal_ts: Optional[int], shipped_
         return None
     if deal_ts:
         after = [o for o in cands if (o.get("created_at") or 0) >= deal_ts - DEAL_GRACE_SEC]
-        if not after:
-            return None
-        # đơn đầu tiên được lên sau khi deal = đơn booking
-        return sorted(after, key=lambda o: o.get("created_at") or 0)[0]
-    if shipped_flag:
+        if after:
+            # đơn đầu tiên được lên sau khi deal = đơn booking
+            return sorted(after, key=lambda o: o.get("created_at") or 0)[0]
+    elif shipped_flag:
         recent = [o for o in cands if (o.get("created_at") or 0) >= time.time() - NO_DEAL_WINDOW_SEC]
-        return recent[0] if recent else None
+        if recent:
+            return recent[0]
+    if LINK_MODE == "any":
+        # không có đơn sau deal → vẫn hiện đơn mới nhất của SĐT này (cả đơn cũ)
+        return sorted(cands, key=lambda o: o.get("created_at") or 0, reverse=True)[0]
     return None
 
 
