@@ -26,10 +26,15 @@ from typing import Dict, Iterator, List, Optional
 
 import requests
 
-NHANH_APP_ID = os.getenv("NHANH_APP_ID", "78743")
-NHANH_SECRET_KEY = os.getenv("NHANH_SECRET_KEY", "")
-NHANH_WEBHOOK_VERIFY_TOKEN = os.getenv("NHANH_WEBHOOK_VERIFY_TOKEN", "")
-NHANH_REDIRECT_URL = os.getenv(
+def _env(name: str, default: str = "") -> str:
+    """Đọc env và bỏ khoảng trắng/xuống dòng thừa (hay dính khi copy-paste vào Railway)."""
+    return (os.getenv(name, default) or "").strip().strip('"').strip("'")
+
+
+NHANH_APP_ID = _env("NHANH_APP_ID", "78743")
+NHANH_SECRET_KEY = _env("NHANH_SECRET_KEY")
+NHANH_WEBHOOK_VERIFY_TOKEN = _env("NHANH_WEBHOOK_VERIFY_TOKEN")
+NHANH_REDIRECT_URL = _env(
     "NHANH_REDIRECT_URL",
     "https://jarvis-lark-bot-production.up.railway.app/nhanh/oauth/callback",
 )
@@ -41,9 +46,9 @@ OAUTH_URL = "https://nhanh.vn/oauth"
 # token mới được set vào đây, đồng thời in ra log để bạn dán vào Railway env
 # (container Railway không giữ file sau khi redeploy).
 _token = {
-    "access_token": os.getenv("NHANH_ACCESS_TOKEN", ""),
-    "business_id": os.getenv("NHANH_BUSINESS_ID", ""),
-    "expired_at": int(os.getenv("NHANH_TOKEN_EXPIRED_AT", "0") or 0),
+    "access_token": _env("NHANH_ACCESS_TOKEN"),
+    "business_id": _env("NHANH_BUSINESS_ID"),
+    "expired_at": int(_env("NHANH_TOKEN_EXPIRED_AT", "0") or 0),
     "permissions": [],
     "depot_ids": [],
 }
@@ -125,9 +130,12 @@ def token_info() -> dict:
     """Thông tin token (không lộ token đầy đủ)."""
     tok = _token["access_token"] or ""
     exp = _token["expired_at"] or 0
+    sk = NHANH_SECRET_KEY or ""
     return {
         "app_id": NHANH_APP_ID,
         "configured": is_configured(),
+        "secret_key_len": len(sk),
+        "secret_key_hint": (sk[:2] + "…" + sk[-2:]) if len(sk) >= 6 else "",
         "has_token": has_token(),
         "business_id": _token["business_id"],
         "token_prefix": (tok[:8] + "...") if tok else "",
@@ -168,7 +176,12 @@ def exchange_access_code(access_code: str) -> dict:
         json={"accessCode": access_code, "secretKey": NHANH_SECRET_KEY},
         timeout=20,
     )
-    data = _parse_response(resp)
+    try:
+        data = _parse_response(resp)
+    except NhanhError as e:
+        print(f"❌ [Nhanh] getaccesstoken failed: appId={NHANH_APP_ID} secretKey(len={len(NHANH_SECRET_KEY)}) "
+              f"accessCode={access_code[:6]}…(len={len(access_code)}) → {e}")
+        raise
     d = data.get("data", {})
     set_token(
         d.get("accessToken", ""), d.get("businessId", ""), d.get("expiredAt", 0),

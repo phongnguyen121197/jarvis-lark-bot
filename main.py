@@ -1627,9 +1627,19 @@ async def nhanh_oauth_callback(request: Request):
     if not code:
         return HTMLResponse("<h3>Thiếu accessCode trên URL</h3>", status_code=400)
     try:
-        d = nhanh.exchange_access_code(code)
+        d = nhanh.exchange_access_code(code.strip())
     except Exception as e:
-        return HTMLResponse(f"<h3>Đổi token thất bại</h3><pre>{str(e)}</pre>", status_code=400)
+        info = nhanh.token_info()
+        hint = (
+            "<p>Nguyên nhân thường gặp:</p><ol>"
+            "<li><b>accessCode đã dùng hoặc quá 10 phút</b> (bấm reload trang này cũng làm mã cháy) "
+            "→ làm lại từ <a href='/nhanh/oauth/start'>/nhanh/oauth/start</a>, không reload trang callback.</li>"
+            f"<li><b>Secret key trên Railway sai</b>: bot đang dùng key dài <b>{info['secret_key_len']}</b> ký tự, "
+            f"bắt đầu/kết thúc <code>{info['secret_key_hint']}</code>. So với trang chi tiết app trên open.nhanh.vn; "
+            "nếu khác, sửa biến NHANH_SECRET_KEY rồi đợi redeploy trước khi uỷ quyền lại.</li>"
+            f"<li>App ID bot đang dùng: <b>{info['app_id']}</b> (phải là 78743).</li></ol>"
+        )
+        return HTMLResponse(f"<h3>Đổi token thất bại</h3><pre>{str(e)}</pre>{hint}", status_code=400)
 
     info = nhanh.token_info()
     # In token ra log để copy vào Railway (container không giữ file sau redeploy)
