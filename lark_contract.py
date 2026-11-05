@@ -10,6 +10,7 @@ trong background tasks.
 
 import os
 import requests
+import threading
 import time
 
 # ╔════════════════════════════════════════════════════════════════╗
@@ -17,35 +18,74 @@ import time
 # ╚════════════════════════════════════════════════════════════════╝
 
 LARK_APP_ID = os.getenv("LARK_APP_ID", "cli_a816ab3b94b8d010")
-LARK_APP_SECRET = os.getenv("LARK_APP_SECRET", "Xyyqd95i9xbNeVSGNo48jb7ADDD8lC2u")
+LARK_APP_SECRET = os.getenv("LARK_APP_SECRET", "")
 LARK_API = "https://open.larksuite.com/open-apis"
+
+# Mã lỗi Lark báo token không còn dùng được → lấy token mới rồi gọi lại
+TOKEN_INVALID_CODES = {99991661, 99991663, 99991668, 99991677}
+# Mã lỗi quá tải / rate limit → chờ rồi gọi lại
+RATE_LIMIT_CODES = {99991400, 1254290, 1254291}
 
 # ╔════════════════════════════════════════════════════════════════╗
 # ║                     TOKEN MANAGEMENT                           ║
 # ╚════════════════════════════════════════════════════════════════╝
 
 _token_cache = {"token": None, "expires": 0}
+_token_lock = threading.Lock()
+
+
+def _fetch_token() -> str:
+    """Gọi Lark lấy tenant_access_token mới (thử tối đa 3 lần)."""
+    if not LARK_APP_SECRET:
+        raise Exception("❌ Lark auth failed: thiếu biến môi trường LARK_APP_SECRET")
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"{LARK_API}/auth/v3/tenant_access_token/internal",
+                json={"app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET},
+                timeout=10,
+            )
+            data = resp.json()
+        except Exception as e:
+            last_err = Exception(f"❌ Lark auth request failed: {e}")
+            time.sleep(1 + attempt)
+            continue
+        if data.get("code") == 0 and data.get("tenant_access_token"):
+            # Lark trả expire (giây, thường 7200). Cache ngắn hơn 10 phút cho an toàn.
+            expire = data.get("expire") or 7200
+            ttl = max(300, min(5400, int(expire) - 600))
+            _token_cache["token"] = data["tenant_access_token"]
+            _token_cache["expires"] = time.time() + ttl
+            return _token_cache["token"]
+        last_err = Exception(f"❌ Lark auth failed: {data}")
+        time.sleep(1 + attempt)
+    raise last_err
 
 
 def get_token() -> str:
-    """Lấy tenant access token (sync, có cache)"""
-    now = time.time()
-    if _token_cache["token"] and now < _token_cache["expires"]:
+    """Lấy tenant access token (sync, có cache, an toàn khi nhiều thread gọi cùng lúc)."""
+    if _token_cache["token"] and time.time() < _token_cache["expires"]:
         return _token_cache["token"]
+    with _token_lock:
+        # Thread khác có thể vừa làm mới xong trong lúc chờ lock
+        if _token_cache["token"] and time.time() < _token_cache["expires"]:
+            return _token_cache["token"]
+        return _fetch_token()
 
-    resp = requests.post(
-        f"{LARK_API}/auth/v3/tenant_access_token/internal",
-        json={"app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET},
-        timeout=10,
-    )
-    data = resp.json()
 
-    if data.get("code") != 0:
-        raise Exception(f"❌ Lark auth failed: {data}")
-
-    _token_cache["token"] = data["tenant_access_token"]
-    _token_cache["expires"] = now + 5400  # cache ~90 phút
-    return _token_cache["token"]
+def refresh_token(stale: str = None) -> str:
+    """
+    Bỏ token đang cache và lấy token mới.
+    stale: token vừa bị Lark từ chối – nếu cache đã đổi sang token khác rồi
+    (thread khác làm mới trước) thì dùng luôn token đó, không gọi Lark thêm.
+    """
+    with _token_lock:
+        if stale is None or _token_cache["token"] in (None, stale):
+            _token_cache["token"] = None
+            _token_cache["expires"] = 0
+            return _fetch_token()
+        return _token_cache["token"]
 
 
 def headers() -> dict:
@@ -54,6 +94,48 @@ def headers() -> dict:
         "Authorization": f"Bearer {get_token()}",
         "Content-Type": "application/json",
     }
+
+
+def lark_request(method: str, url: str, timeout: int = 15, **kwargs) -> dict:
+    """
+    Gọi Lark API và trả về JSON (dict có 'code').
+    - Token bị từ chối (99991663...) → lấy token mới, gọi lại (tối đa 2 lần).
+    - Rate limit (HTTP 429 / 99991400) → chờ rồi gọi lại.
+    - Lỗi mạng → thử lại 1 lần.
+    Không raise: caller tự kiểm tra data['code'].
+    """
+    data = {}
+    for attempt in range(3):
+        token = get_token()
+        h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        try:
+            resp = requests.request(method, url, headers=h, timeout=timeout, **kwargs)
+        except Exception as e:
+            data = {"code": -1, "msg": f"request error: {e}"}
+            if attempt < 2:
+                time.sleep(1 + attempt)
+                continue
+            return data
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {"code": resp.status_code or -1, "msg": (resp.text or "")[:200]}
+
+        code = data.get("code")
+        if code == 0:
+            return data
+        if code in TOKEN_INVALID_CODES and attempt < 2:
+            print(f"⚠️ Lark token bị từ chối (code={code}) → làm mới token và gọi lại ({method} {url.split('/open-apis/')[-1]})")
+            refresh_token(stale=token)
+            time.sleep(0.3 * (attempt + 1))
+            continue
+        if (code in RATE_LIMIT_CODES or resp.status_code == 429) and attempt < 2:
+            wait = 1.5 * (attempt + 1)
+            print(f"⚠️ Lark rate limit (code={code}) → chờ {wait}s rồi gọi lại")
+            time.sleep(wait)
+            continue
+        return data
+    return data
 
 
 # ╔════════════════════════════════════════════════════════════════╗
@@ -67,13 +149,7 @@ def update_record(app_token: str, table_id: str, record_id: str, fields: dict) -
     """
     url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
 
-    resp = requests.put(
-        url,
-        headers=headers(),
-        json={"fields": fields},
-        timeout=15,
-    )
-    data = resp.json()
+    data = lark_request("PUT", url, json={"fields": fields}, timeout=15)
 
     if data.get("code") != 0:
         print(f"❌ Lark update_record error: code={data.get('code')} msg={data.get('msg')}")
@@ -87,8 +163,7 @@ def get_record(app_token: str, table_id: str, record_id: str) -> dict:
     """Đọc 1 record từ Bitable (SYNC)."""
     url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
 
-    resp = requests.get(url, headers=headers(), timeout=15)
-    data = resp.json()
+    data = lark_request("GET", url, timeout=15)
 
     if data.get("code") != 0:
         print(f"❌ Lark get_record error: code={data.get('code')} msg={data.get('msg')}")
@@ -104,10 +179,14 @@ def download_attachment(file_token: str, save_path: str) -> bool:
     Returns True if successful.
     """
     url = f"{LARK_API}/drive/v1/medias/{file_token}/download"
-    h = {"Authorization": f"Bearer {get_token()}"}
-    
+
     try:
-        resp = requests.get(url, headers=h, timeout=30, stream=True)
+        token = get_token()
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30, stream=True)
+        if resp.status_code in (401, 403):
+            # Token có thể vừa bị thu hồi → lấy token mới, thử lại 1 lần
+            token = refresh_token(stale=token)
+            resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30, stream=True)
         if resp.status_code == 200:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with open(save_path, "wb") as f:
@@ -169,10 +248,9 @@ def fetch_cccd_images(app_token: str, table_id: str, record_id: str, tmp_dir: st
 def list_fields(app_token: str, table_id: str) -> list:
     """List all fields in a Bitable table."""
     url = f"{LARK_API}/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
-    resp = requests.get(url, headers=headers(), timeout=15)
-    data = resp.json()
+    data = lark_request("GET", url, timeout=15)
     if data.get("code") != 0:
-        print(f"❌ list_fields error: {data.get('msg')}")
+        print(f"❌ list_fields error: code={data.get('code')} msg={data.get('msg')}")
         return []
     return data.get("data", {}).get("items", [])
 
@@ -185,8 +263,7 @@ def list_records(app_token: str, table_id: str, page_size: int = 500, max_pages:
         params = {"page_size": page_size}
         if page_token:
             params["page_token"] = page_token
-        resp = requests.get(url, headers=headers(), params=params, timeout=30)
-        data = resp.json()
+        data = lark_request("GET", url, params=params, timeout=30)
         if data.get("code") != 0:
             raise Exception(f"Lark list_records error: code={data.get('code')} msg={data.get('msg')}")
         d = data.get("data", {})
@@ -207,8 +284,7 @@ def create_field(app_token: str, table_id: str, field_name: str, field_type: int
     body = {"field_name": field_name, "type": field_type}
     if property:
         body["property"] = property
-    resp = requests.post(url, headers=headers(), json=body, timeout=15)
-    data = resp.json()
+    data = lark_request("POST", url, json=body, timeout=15)
     if data.get("code") != 0:
         raise Exception(f"Lark create_field '{field_name}' error: code={data.get('code')} msg={data.get('msg')}")
     return data.get("data", {}).get("field", {})
@@ -295,9 +371,8 @@ def add_field_options(app_token: str, table_id: str, field_id: str, existing_opt
     print(f"🔧 [UpdateField] URL: {url}")
     print(f"🔧 [UpdateField] Body: {body}")
     
-    resp = requests.put(url, headers=headers(), json=body, timeout=15)
-    data = resp.json()
-    
+    data = lark_request("PUT", url, json=body, timeout=15)
+
     if data.get("code") != 0:
         print(f"❌ add_field_options error: {data.get('msg')} (code={data.get('code')})")
         print(f"   Full response: {data}")

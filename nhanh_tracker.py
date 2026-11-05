@@ -118,7 +118,16 @@ def build_index(force: bool = False) -> dict:
     with _lock:
         if not force and _index_cache["by_phone"] and time.time() - _index_cache["ts"] < INDEX_TTL_SEC:
             return _index_cache
-        records = list_records(BOOKING_APP_TOKEN, BOOKING_TABLE_ID)
+        try:
+            records = list_records(BOOKING_APP_TOKEN, BOOKING_TABLE_ID)
+        except Exception as e:
+            # Lark lỗi tạm thời (token/rate limit/mạng): dùng lại index cũ nếu có,
+            # để 1 lần lỗi không làm hỏng cả webhook.
+            if _index_cache["by_phone"]:
+                age = int(time.time() - _index_cache["ts"])
+                print(f"⚠️ [Nhanh] Không đọc được bảng booking ({e}) → dùng index cũ ({age}s)")
+                return _index_cache
+            raise
         by_phone: Dict[str, List[dict]] = {}
         by_order: Dict[str, str] = {}
         by_order_status: Dict[str, str] = {}
