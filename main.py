@@ -1772,6 +1772,53 @@ async def nhanh_link(all: bool = False, limit: int = 200):
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
+@app.get("/nhanh/link-mkt")
+@app.post("/nhanh/link-mkt")
+async def nhanh_link_mkt(days: int = 0, relink: bool = False):
+    """
+    Luồng chính: quét đơn lên dưới tên 'Phòng MKT', tách SĐT KOC trong ghi chú,
+    khớp record booking (ưu tiên sản phẩm trùng) và ghi trạng thái.
+    ?days=N giới hạn số ngày nhìn lại (mặc định NHANH_MKT_LOOKBACK_DAYS=120); ?relink=true ghi lại cả record đã gắn.
+    """
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+    try:
+        stats = await loop.run_in_executor(None, nhanh_tracker.link_bookings_via_mkt_orders, days or None, relink)
+        return {"success": True, **stats}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/nhanh/debug-mkt")
+async def nhanh_debug_mkt(days: int = 30, limit: int = 10):
+    """Debug: đơn 'Phòng MKT' gần đây và kết quả tách ghi chú (SĐT che 4 số giữa), không ghi gì."""
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+    def _mask(v):
+        v = str(v or ""); return v[:3] + "****" + v[-3:] if len(v) >= 8 else v
+    def _run():
+        idx = nhanh_tracker.build_index(force=True)
+        out = []
+        for o in nhanh_tracker.fetch_mkt_orders(days)[:max(1, min(int(limit), 50))]:
+            cands = idx["by_phone"].get(o.get("note_phone") or "", [])
+            out.append({"order_id": o["order_id"], "status": o["status"], "created_at": o["created_at"],
+                        "product": o.get("product_names", []), "note_name": o.get("note_name"),
+                        "note_phone": _mask(o.get("note_phone")), "tracking": o.get("carrier_code"),
+                        "description": (o.get("description") or "")[:80],
+                        "private_description": (o.get("private_description") or "")[:160],
+                        "candidates": [{"koc": c["koc"], "product": c.get("product"),
+                                        "score": round(nhanh_tracker.product_match_score(c.get("product",""), o.get("product_names", [])), 2)} for c in cands]})
+        return {"success": True, "mkt_phones": [_mask(p) for p in nhanh_tracker.MKT_PHONES], "orders": out}
+    try:
+        return await loop.run_in_executor(None, _run)
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
 @app.get("/nhanh/refresh")
 @app.post("/nhanh/refresh")
 async def nhanh_refresh(include_final: bool = False):

@@ -33,6 +33,14 @@ BOOKING_APP_TOKEN = os.getenv("NHANH_BOOKING_APP_TOKEN", "V89SbotPpakF3DsJbyAljv
 BOOKING_TABLE_ID = os.getenv("NHANH_BOOKING_TABLE_ID", "tblyf1KR7lDjoEzz")
 PHONE_FIELDS = [s.strip() for s in os.getenv("NHANH_BOOKING_PHONE_FIELDS", "Thông tin nhận hàng").split(";") if s.strip()]
 
+# Đơn KOC được lên dưới tên khách 'Phòng MKT' (SĐT thật của KOC nằm trong ghi chú đơn)
+MKT_PHONES = [nc.normalize_phone(x) for x in os.getenv("NHANH_MKT_PHONES", "0944039148").split(",") if nc.normalize_phone(x)]
+MKT_LOOKBACK_DAYS = int(os.getenv("NHANH_MKT_LOOKBACK_DAYS", "120") or 120)
+# Cột sản phẩm trên bảng booking dùng để đối chiếu với sản phẩm trên đơn
+PRODUCT_FIELDS = [s.strip() for s in os.getenv(
+    "NHANH_BOOKING_PRODUCT_FIELDS",
+    "Phân loại sp gửi hàng (Chỉ được chọn - Không được add mới);Sản phẩm;Dung tích").split(";") if s.strip()]
+
 F_ORDER_ID = "Nhanh - Mã đơn"
 F_STATUS = "Nhanh - Trạng thái"
 F_CARRIER_CODE = "Nhanh - Mã vận đơn"
@@ -129,6 +137,9 @@ def build_index(force: bool = False) -> dict:
                 "order_id": _cell_text(fields.get(F_ORDER_ID)).strip(),
                 "status": _cell_text(fields.get(F_STATUS)).strip(),
                 "phones": phones,
+                "product": " ".join(_cell_text(fields.get(pf)) for pf in PRODUCT_FIELDS).strip(),
+                "deal_ts": _record_deal_ts(fields),
+                "shipped": _is_checked(fields.get(F_SHIPPED_FLAG)),
             }
             for p in phones:
                 by_phone.setdefault(p, []).append(entry)
@@ -139,6 +150,68 @@ def build_index(force: bool = False) -> dict:
                              "by_order_status": by_order_status, "count": len(records)})
         print(f"📇 [Nhanh] Booking index: {len(records)} records, {len(by_phone)} phones, {len(by_order)} linked orders")
         return _index_cache
+
+
+def _norm_text(t: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFD", str(t or "").lower())
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
+    t = t.replace("đ", "d")
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+_PRODUCT_STOPWORDS = {"u", "w", "m", "full", "edp", "edt", "ml", "nuoc", "hoa", "chai", "set", "test", "unbox"}
+
+
+def product_match_score(record_product: str, order_product_names: List[str]) -> float:
+    """
+    0..1: mức khớp giữa cột sản phẩm của record (vd 'VELIXIR Icarus EDP 35ml')
+    và tên sản phẩm trên đơn (vd 'VELIXIR Icarus EDP 35ml - U').
+    """
+    rp = _norm_text(record_product)
+    if not rp:
+        return 0.0
+    rtok = {t for t in rp.split() if t not in _PRODUCT_STOPWORDS and len(t) > 1}
+    if not rtok:
+        return 0.0
+    best = 0.0
+    for name in order_product_names or []:
+        on = _norm_text(name)
+        if not on:
+            continue
+        if rp in on or on in rp:
+            return 1.0
+        otok = {t for t in on.split() if t not in _PRODUCT_STOPWORDS and len(t) > 1}
+        if otok:
+            best = max(best, len(rtok & otok) / len(rtok))
+    return best
+
+
+def _deal_compatible(order: dict, deal_ts: Optional[int]) -> bool:
+    if not deal_ts:
+        return True
+    return (order.get("created_at") or 0) >= deal_ts - DEAL_GRACE_SEC
+
+
+def choose_record_for_order(order: dict, candidates: List[dict]) -> Optional[dict]:
+    """
+    Nhiều record cùng SĐT (KOC booking nhiều lần / nhiều dòng con): chọn record
+    có sản phẩm khớp nhất; hoà thì ưu tiên record chưa gắn đơn, rồi Ngày deal
+    gần với ngày tạo đơn nhất.
+    """
+    if not candidates:
+        return None
+    oid = order.get("order_id")
+    for c in candidates:
+        if c.get("order_id") == oid:
+            return c
+    def key(c):
+        score = product_match_score(c.get("product", ""), order.get("product_names", []))
+        unlinked = 1 if not c.get("order_id") else 0
+        compat = 1 if _deal_compatible(order, c.get("deal_ts")) else 0
+        gap = abs((order.get("created_at") or 0) - (c.get("deal_ts") or order.get("created_at") or 0))
+        return (round(score, 2), compat, unlinked, -gap, c.get("idx", 0))
+    return sorted(candidates, key=key, reverse=True)[0]
 
 
 def find_booking_for_order(order: dict) -> Optional[dict]:
@@ -152,15 +225,18 @@ def find_booking_for_order(order: dict) -> Optional[dict]:
     oid = order.get("order_id", "")
     if oid and oid in index["by_order"]:
         return {"record_id": index["by_order"][oid], "reason": "order_id"}
-    phone = order.get("mobile", "")
+    phone = order.get("effective_mobile") or order.get("mobile", "")
     if not phone:
         return None
     candidates = index["by_phone"].get(phone) or []
     if not candidates:
         return None
-    free = [c for c in candidates if not c["order_id"]]
-    pick = (free or candidates)[-1]
-    return {"record_id": pick["record_id"], "koc": pick["koc"], "reason": "phone_free" if free else "phone_overwrite"}
+    pick = choose_record_for_order(order, candidates)
+    if not pick:
+        return None
+    score = product_match_score(pick.get("product", ""), order.get("product_names", []))
+    reason = "phone+product" if score >= 0.5 else ("phone_free" if not pick.get("order_id") else "phone_overwrite")
+    return {"record_id": pick["record_id"], "koc": pick["koc"], "reason": reason, "product_score": round(score, 2)}
 
 
 # ╔════════════════════════════════════════════════════════════════╗
@@ -382,7 +458,7 @@ def link_bookings_by_phone(only_unlinked: bool = True, limit: int = 200) -> dict
         phones = []
         for pf in PHONE_FIELDS:
             for p in nc.extract_phones(_cell_text(fields.get(pf))):
-                if p not in phones:
+                if p not in phones and p not in MKT_PHONES:
                     phones.append(p)
         if not phones:
             stats["no_phone"] += 1
@@ -416,6 +492,80 @@ def link_bookings_by_phone(only_unlinked: bool = True, limit: int = 200) -> dict
             stats["details"].append({"koc": koc, "phones": phones, "error": str(e)[:200]})
     print(f"🔗 [Nhanh] Link by phone: {stats['linked']} linked / {stats['checked']} checked "
           f"({stats['no_order']} no order, {stats['no_phone']} no phone, {stats['errors']} errors)")
+    stats["details"] = stats["details"][:100]
+    build_index(force=True)
+    return stats
+
+
+def fetch_mkt_orders(lookback_days: int = None) -> List[dict]:
+    """Tất cả đơn lên dưới tên khách 'Phòng MKT' trong N ngày (đã normalize, mới nhất trước)."""
+    days = lookback_days or MKT_LOOKBACK_DAYS
+    since = time.time() - days * 86400
+    orders = []
+    for mkt_phone in MKT_PHONES:
+        for raw in nc.list_orders_by_phone(mkt_phone):
+            o = nc.normalize_order(raw)
+            if (o.get("created_at") or 0) >= since:
+                orders.append(o)
+    orders.sort(key=lambda o: o.get("created_at") or 0, reverse=True)
+    return orders
+
+
+def link_bookings_via_mkt_orders(lookback_days: int = None, relink: bool = False) -> dict:
+    """
+    Luồng chính của Ken: đơn KOC lên dưới tên 'Phòng MKT' → SĐT KOC nằm trong ghi chú.
+    Với mỗi đơn MKT: tách SĐT ghi chú → record cùng SĐT → chọn record theo sản phẩm.
+    Mỗi record chỉ giữ 1 đơn (sản phẩm khớp nhất, rồi đơn sớm nhất sau Ngày deal).
+    """
+    index = build_index(force=True)
+    orders = fetch_mkt_orders(lookback_days)
+    stats = {"mkt_orders": len(orders), "with_phone": 0, "matched": 0, "linked": 0, "unchanged": 0,
+             "no_phone_in_note": 0, "no_record": 0, "errors": 0, "details": []}
+    best_for_record: Dict[str, Tuple[tuple, dict, dict]] = {}
+    for o in orders:
+        phone = o.get("note_phone") or ""
+        if not phone or phone in MKT_PHONES:
+            stats["no_phone_in_note"] += 1
+            continue
+        stats["with_phone"] += 1
+        cands = index["by_phone"].get(phone) or []
+        if not cands:
+            stats["no_record"] += 1
+            continue
+        rec = choose_record_for_order(o, cands)
+        if not rec:
+            continue
+        stats["matched"] += 1
+        score = product_match_score(rec.get("product", ""), o.get("product_names", []))
+        compat = 1 if _deal_compatible(o, rec.get("deal_ts")) else 0
+        same = 1 if rec.get("order_id") == o.get("order_id") else 0
+        # đơn tốt nhất cho record: sản phẩm khớp > hợp Ngày deal > đã gắn sẵn > tạo sớm nhất sau deal
+        rank = (round(score, 2), compat, same, -(o.get("created_at") or 0))
+        cur = best_for_record.get(rec["record_id"])
+        if cur is None or rank > cur[0]:
+            best_for_record[rec["record_id"]] = (rank, o, rec)
+
+    for rid, (rank, o, rec) in best_for_record.items():
+        try:
+            if rec.get("order_id") == o["order_id"] and not relink:
+                # đã gắn đúng đơn này → chỉ cập nhật trạng thái nếu đổi (và chưa final)
+                if is_final_status(status_text=rec.get("status", "")):
+                    stats["unchanged"] += 1
+                    continue
+                key = (o.get("status_code"), o.get("carrier_code"))
+                if _last_written.get(o["order_id"]) == key or rec.get("status") == o.get("status"):
+                    _last_written[o["order_id"]] = key
+                    stats["unchanged"] += 1
+                    continue
+            r = _write_order_to_record(rid, o, "mkt", rec.get("koc", ""))
+            stats["linked"] += 1
+            stats["details"].append({**r, "product_score": rank[0], "deal_ok": bool(rank[1]),
+                                     "note_name": o.get("note_name", ""), "product": o.get("product_names", [])[:1]})
+        except Exception as e:
+            stats["errors"] += 1
+            stats["details"].append({"record_id": rid, "error": str(e)[:200]})
+    print(f"🏷️ [Nhanh] MKT orders: {stats['mkt_orders']} scanned, {stats['matched']} matched, "
+          f"{stats['linked']} written, {stats['unchanged']} unchanged, {stats['no_record']} no record")
     stats["details"] = stats["details"][:100]
     build_index(force=True)
     return stats
@@ -465,6 +615,10 @@ def refresh_linked_orders(include_final: bool = False) -> dict:
 def scheduled_cycle() -> dict:
     """Chu kỳ định kỳ (xem NHANH_SCHEDULE_* trong main.py): gắn booking mới theo SĐT + làm mới đơn chưa final."""
     out = {}
+    try:
+        out["mkt"] = link_bookings_via_mkt_orders()
+    except Exception as e:
+        out["mkt"] = {"error": str(e)}
     try:
         out["link"] = link_bookings_by_phone(only_unlinked=True)
     except Exception as e:

@@ -371,6 +371,45 @@ def _ts(value) -> Optional[int]:
     return None
 
 
+_NOTE_PHONE_RE = re.compile(r"(?:SĐT|SDT|Sđt|sđt|ĐT|Phone|Số điện thoại)\s*[:：]?\s*((?:\+?84|0)[\d\s.\-]{8,13})", re.I)
+_NOTE_NAME_RE = re.compile(r"Tên\s*[:：]\s*(.+?)(?=\s*(?:Địa chỉ|Dia chi|SĐT|SDT|$))", re.I | re.S)
+_NOTE_ADDR_RE = re.compile(r"Địa chỉ\s*[:：]\s*(.+?)(?=\s*(?:SĐT|SDT|Sđt|$))", re.I | re.S)
+_TRACKING_RE = re.compile(r"\b([A-Z]{2,6}[A-Z0-9]{8,})\b")
+
+
+def parse_recipient_note(*texts) -> dict:
+    """
+    Đơn KOC của Ken lên với khách 'Phòng MKT'; thông tin người nhận thật nằm trong
+    ghi chú: 'SPXVN0666… ---- Tên: Hải Anh  Địa chỉ: …  SĐT: 0329257185'.
+    Trả về {name, address, phone, tracking}.
+    """
+    joined = "\n".join(str(t) for t in texts if t)
+    out = {"name": "", "address": "", "phone": "", "tracking": ""}
+    if not joined.strip():
+        return out
+    m = _NOTE_PHONE_RE.search(joined)
+    if m:
+        out["phone"] = normalize_phone(m.group(1))
+    else:
+        # dự phòng: tìm SĐT trần, nhưng bỏ các mã vận đơn (SPXVN0666…) để không nhầm
+        cleaned = _TRACKING_RE.sub(" ", joined)
+        phones = extract_phones(cleaned)
+        out["phone"] = phones[0] if phones else ""
+    m = _NOTE_NAME_RE.search(joined)
+    if m:
+        out["name"] = " ".join(m.group(1).split())[:120]
+    m = _NOTE_ADDR_RE.search(joined)
+    if m:
+        out["address"] = " ".join(m.group(1).split())[:300]
+    for line in joined.splitlines():
+        line = line.strip()
+        mt = _TRACKING_RE.search(line)
+        if mt and not line.lower().startswith(("tên", "địa chỉ", "sđt", "sdt")):
+            out["tracking"] = mt.group(1)
+            break
+    return out
+
+
 def normalize_order(raw: dict) -> dict:
     """
     Đưa đơn từ order/list hoặc webhook (orderAdd/orderUpdate/orderPartialReturn)
@@ -423,9 +462,21 @@ def normalize_order(raw: dict) -> dict:
         total += line_total
         products.append({"name": p.get("name", ""), "code": p.get("code", ""), "quantity": qty, "price": price})
 
+    description = info.get("description") or ""
+    private_description = info.get("privateDescription") or ""
+    note = parse_recipient_note(description, private_description)
+
     return {
         "order_id": str(order_id) if order_id is not None else "",
         "status_code": status_code,
+        # người nhận thật (từ ghi chú) - ưu tiên khi đơn lên dưới tên 'Phòng MKT'
+        "note_phone": note["phone"],
+        "note_name": note["name"],
+        "note_address": note["address"],
+        "note_tracking": note["tracking"],
+        "effective_mobile": note["phone"] or mobile,
+        "private_description": private_description,
+        "product_names": [p.get("name", "") for p in (raw.get("products") or []) if isinstance(p, dict)],
         "status": ORDER_STATUS.get(status_code, f"Mã {status_code}" if status_code is not None else ""),
         "status_group": STATUS_GROUP.get(status_code, ""),
         "customer_name": _first(ship, "name") or _first(customer, "name") or "",
@@ -433,13 +484,13 @@ def normalize_order(raw: dict) -> dict:
         "address": ship.get("address", ""),
         "carrier_id": carrier_id,
         "carrier_name": carrier_name or "",
-        "carrier_code": carrier.get("carrierCode") or carrier.get("fullCarrierCode") or "",
+        "carrier_code": carrier.get("carrierCode") or carrier.get("fullCarrierCode") or note["tracking"] or "",
         "tracking_url": info.get("trackingUrl") or "",
         "sale_channel": SALE_CHANNELS.get(sale_channel, str(sale_channel or "")),
         "app_order_id": channel.get("appOrderId") or "",
         "created_at": _ts(info.get("createdAt")),
         "updated_at": _ts(info.get("updatedAt")),
-        "description": info.get("description") or "",
+        "description": description,
         "cod_amount": payment.get("codAmount"),
         "total_amount": total,
         "products": products,

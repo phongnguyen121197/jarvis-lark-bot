@@ -1,8 +1,17 @@
 # Nhanh.vn ↔ Jarvis – Tracking trạng thái đơn booking
 
 Jarvis theo dõi đơn hàng trên Nhanh.vn và ghi trạng thái về bảng booking trên Lark Base
-(`PR - Data list booking Ken Perfume`, Base Cheng). Đơn ↔ booking được khớp bằng **SĐT người nhận
-trên đơn** so với SĐT tách từ cột `Thông tin nhận hàng` của record booking.
+(`PR - Data list booking Ken Perfume`, Base Cheng).
+
+**Cách khớp đơn ↔ booking (quy trình Ken):** đơn KOC được lên trên Nhanh với khách hàng **"Phòng MKT"**
+(SĐT `0944039148`), thông tin người nhận thật ghi trong ghi chú nội bộ dạng
+`Tên: … Địa chỉ: … SĐT: 03xxxxxxxx`, mã vận đơn (SPXVN…) ở ghi chú đơn. Bot quét các đơn của "Phòng MKT",
+tách SĐT trong ghi chú, tìm record booking có cùng SĐT trong `Thông tin nhận hàng`; nếu KOC có nhiều
+record thì chọn record có **sản phẩm khớp** với đơn (cột `Phân loại sp gửi hàng` / `Sản phẩm` / `Dung tích`),
+rồi tới Ngày deal gần nhất. Đơn lên trực tiếp bằng SĐT KOC cũng được khớp (đường phụ).
+
+Biến liên quan: `NHANH_MKT_PHONES` (mặc định `0944039148`, nhiều số cách nhau dấu phẩy),
+`NHANH_MKT_LOOKBACK_DAYS` (mặc định 120), `NHANH_BOOKING_PRODUCT_FIELDS`.
 
 Bot nhận dữ liệu bằng 2 đường song song: **webhook** (Nhanh đẩy ngay khi đơn thêm/sửa/xóa/trả hàng)
 và **chu kỳ 10 phút** qua API: (1) với record booking chưa có mã đơn → hỏi Nhanh các đơn của SĐT đó và gắn
@@ -64,7 +73,9 @@ Nhanh sẽ gửi thử sự kiện `webhooksEnabled` tới callback; endpoint tr
 
 | Việc | Cách làm |
 |---|---|
-| **Gắn đơn cho booking theo SĐT** (chạy đầu tiên) | `GET /nhanh/link` – chỉ record chưa có mã đơn; `?all=true` gắn lại toàn bộ |
+| **Quét đơn "Phòng MKT" → gắn booking** (luồng chính) | `GET /nhanh/link-mkt` – `?days=N` nhìn lại N ngày, `?relink=true` ghi lại cả record đã gắn |
+| Soi đơn "Phòng MKT" + kết quả tách ghi chú | `GET /nhanh/debug-mkt?days=30&limit=10` |
+| Gắn đơn theo SĐT KOC trực tiếp (đường phụ) | `GET /nhanh/link` – chỉ record chưa có mã đơn; `?all=true` gắn lại toàn bộ |
 | Làm mới trạng thái các đơn đã gắn | `GET /nhanh/refresh` |
 | Soi: mỗi SĐT booking có bao nhiêu đơn trên Nhanh | `GET /nhanh/debug-match?limit=5` |
 | Quét theo thời gian cập nhật (ít dùng) | `GET /nhanh/sync?minutes=43200` (tối đa 31 ngày) |
