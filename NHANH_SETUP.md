@@ -5,7 +5,10 @@ Jarvis theo dõi đơn hàng trên Nhanh.vn và ghi trạng thái về bảng bo
 trên đơn** so với SĐT tách từ cột `Thông tin nhận hàng` của record booking.
 
 Bot nhận dữ liệu bằng 2 đường song song: **webhook** (Nhanh đẩy ngay khi đơn thêm/sửa/xóa/trả hàng)
-và **quét định kỳ** mỗi 10 phút qua API (bù webhook rớt). Các cột sau được **tự tạo** trong bảng booking
+và **chu kỳ 10 phút** qua API: (1) với record booking chưa có mã đơn → hỏi Nhanh các đơn của SĐT đó và gắn
+đơn phù hợp nhất (ưu tiên đơn tạo sau *Ngày deal*); (2) với record đã gắn → tra lại theo mã đơn và cập nhật.
+Lưu ý: đơn từ sàn (Shopee/TikTok) bị Nhanh che SĐT nên **không khớp được theo SĐT**, chỉ theo dõi được khi
+đơn được tạo tay trên Nhanh (kênh Admin) hoặc đã gắn mã đơn. Các cột sau được **tự tạo** trong bảng booking
 nếu chưa có: `Nhanh - Mã đơn`, `Nhanh - Trạng thái`, `Nhanh - Mã vận đơn`, `Nhanh - Hãng VC`, `Nhanh - Cập nhật`.
 
 ---
@@ -61,7 +64,10 @@ Nhanh sẽ gửi thử sự kiện `webhooksEnabled` tới callback; endpoint tr
 
 | Việc | Cách làm |
 |---|---|
-| Đồng bộ lần đầu / quét lại | `GET /nhanh/sync?minutes=43200` (30 ngày; tối đa 31 ngày theo giới hạn Nhanh) |
+| **Gắn đơn cho booking theo SĐT** (chạy đầu tiên) | `GET /nhanh/link` – chỉ record chưa có mã đơn; `?all=true` gắn lại toàn bộ |
+| Làm mới trạng thái các đơn đã gắn | `GET /nhanh/refresh` |
+| Soi: mỗi SĐT booking có bao nhiêu đơn trên Nhanh | `GET /nhanh/debug-match?limit=5` |
+| Quét theo thời gian cập nhật (ít dùng) | `GET /nhanh/sync?minutes=43200` (tối đa 31 ngày) |
 | Xem 1 đơn khớp record nào | `GET /nhanh/order/<id đơn Nhanh>` |
 | Tình trạng kết nối | `GET /test/nhanh-status?check=true` |
 | Log | Railway, các dòng gắn `[Nhanh]`, `[Nhanh:webhook]`, `[Nhanh:poll]` |

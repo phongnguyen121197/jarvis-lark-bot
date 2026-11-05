@@ -1620,9 +1620,9 @@ def _nhanh_poll_job():
         return
     def _run():
         try:
-            nhanh_tracker.poll_recent_orders(30)
+            nhanh_tracker.scheduled_cycle()
         except Exception as e:
-            print(f"⚠️ [Nhanh] Poll job error: {e}")
+            print(f"⚠️ [Nhanh] Scheduled cycle error: {e}")
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -1745,6 +1745,68 @@ async def nhanh_sync(minutes: int = 60):
     try:
         stats = await loop.run_in_executor(None, nhanh_tracker.poll_recent_orders, minutes)
         return {"success": True, "minutes": minutes, **stats}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/nhanh/link")
+@app.post("/nhanh/link")
+async def nhanh_link(all: bool = False, limit: int = 200):
+    """
+    Gắn đơn Nhanh cho các record booking theo SĐT (đi từ bảng booking).
+    Mặc định chỉ record chưa có mã đơn; ?all=true để gắn lại toàn bộ.
+    """
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+    try:
+        stats = await loop.run_in_executor(None, nhanh_tracker.link_bookings_by_phone, not all, limit)
+        return {"success": True, **stats}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/nhanh/refresh")
+@app.post("/nhanh/refresh")
+async def nhanh_refresh():
+    """Làm mới trạng thái các đơn đã gắn (tra theo mã đơn)."""
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+    try:
+        stats = await loop.run_in_executor(None, nhanh_tracker.refresh_linked_orders)
+        return {"success": True, **stats}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/nhanh/debug-match")
+async def nhanh_debug_match(limit: int = 5):
+    """Debug: với N SĐT đầu trong bảng booking, Nhanh trả về bao nhiêu đơn (không ghi gì)."""
+    if not nhanh.has_token():
+        return {"success": False, "error": "Chưa có access token"}
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        idx = nhanh_tracker.build_index(force=True)
+        out = []
+        for phone, entries in list(idx["by_phone"].items())[:max(1, min(int(limit), 20))]:
+            try:
+                orders = nhanh.list_orders_by_phone(phone)
+                norm = [nhanh.normalize_order(r) for r in orders[:3]]
+                out.append({"phone": phone[:3] + "****" + phone[-3:], "kocs": [e["koc"] for e in entries],
+                            "orders_found": len(orders),
+                            "latest": [{"order_id": o["order_id"], "status": o["status"], "created_at": o["created_at"],
+                                        "channel": o["sale_channel"], "carrier": o["carrier_name"]} for o in norm]})
+            except Exception as e:
+                out.append({"phone": phone[:3] + "****" + phone[-3:], "error": str(e)[:300]})
+        return {"success": True, "checked": len(out), "results": out}
+
+    try:
+        return await loop.run_in_executor(None, _run)
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}

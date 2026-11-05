@@ -290,6 +290,34 @@ def list_orders_by_ids(ids: List[int]) -> Iterator[dict]:
     return list_orders({"ids": [int(i) for i in ids]})
 
 
+def list_orders_by_phone(phone: str, days_back: int = 365) -> List[dict]:
+    """
+    Tất cả đơn có SĐT người nhận = phone, mới nhất trước.
+    Thử không giới hạn ngày (tài liệu: lọc theo SĐT được bỏ qua khoảng createdAt);
+    nếu Nhanh bắt buộc khoảng ngày thì quét lùi từng cửa sổ 31 ngày.
+    """
+    phone = normalize_phone(phone)
+    if not phone:
+        return []
+    try:
+        orders = list(list_orders({"shippingAddress": {"mobile": phone}}))
+    except NhanhError as e:
+        if "createdAt" not in str(e) and e.error_code not in ("ERR_INVALID_DATA", "ERR_INVALID_FORM_FIELDS"):
+            raise
+        orders = []
+        now = int(time.time())
+        window = 31 * 86400
+        for i in range(max(1, (days_back * 86400) // window + 1)):
+            to_ts = now - i * window
+            from_ts = to_ts - window + 1
+            orders.extend(list_orders({
+                "shippingAddress": {"mobile": phone},
+                "createdAtFrom": from_ts, "createdAtTo": to_ts,
+            }))
+    orders.sort(key=lambda r: (r.get("info") or {}).get("createdAt") or 0, reverse=True)
+    return orders
+
+
 # ╔════════════════════════════════════════════════════════════════╗
 # ║                     CHUẨN HOÁ ĐƠN HÀNG                        ║
 # ╚════════════════════════════════════════════════════════════════╝
